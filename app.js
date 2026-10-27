@@ -1,5 +1,5 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-auth.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
 import { 
   getFirestore, 
   collection, 
@@ -13,8 +13,12 @@ import {
   deleteDoc, 
   getDoc,
   serverTimestamp, 
+  Timestamp, 
   writeBatch 
-} from "https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js";
+} from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
+
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app-check.js";
+import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
 
 // Configuración del proyecto aprovisionado en Firebase
 const firebaseConfig = {
@@ -22,11 +26,26 @@ const firebaseConfig = {
   authDomain: "gen-lang-client-0763498694.firebaseapp.com",
   projectId: "gen-lang-client-0763498694",
   storageBucket: "gen-lang-client-0763498694.firebasestorage.app",
+  messagingSenderId: "1017602413544",
+  appId: "1:1017602413544:web:ed5d51a0a5387df76b4a5d"
 };
 
 const databaseId = "ai-studio-android-finanzas-9de8d947-51ef-49c8-bea7-269c8805f10f";
 
 const app = initializeApp(firebaseConfig);
+
+// ---------------------------------------------------------------
+// APP CHECK (obligatorio para usar la IA de Firebase desde el 2/11/2026)
+// Pegá acá la "clave del sitio" de reCAPTCHA Enterprise (ver guía).
+// ---------------------------------------------------------------
+const APPCHECK_SITE_KEY = "PEGAR_ACA_LA_CLAVE_DE_RECAPTCHA";
+const appCheckActivo = APPCHECK_SITE_KEY && !APPCHECK_SITE_KEY.startsWith("PEGAR");
+if (appCheckActivo) {
+  initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(APPCHECK_SITE_KEY),
+    isTokenAutoRefreshEnabled: true
+  });
+}
 const auth = getAuth(app);
 const db = getFirestore(app, databaseId);
 
@@ -577,27 +596,162 @@ document.getElementById("btnSampleChino").addEventListener("click", () => {
   });
 });
 
-fileReceiptInput.addEventListener("change", (e) => {
+// -------------------------------------------------------------
+// LECTURA REAL DE TICKETS CON GEMINI (Firebase AI Logic)
+// -------------------------------------------------------------
+const lineItemSchema = Schema.object({
+  properties: {
+    rawDescription: Schema.string({ description: "Descripción textual del producto tal cual figura en el ticket" }),
+    canonicalName: Schema.string({ description: "Nombre genérico normalizado (ej: 'Tapas de empanadas rotiseras', 'Leche entera', 'Pechuga de pollo'). Si no tiene detalle (ej: 'ALMACEN', 'VARIOS'), escribir 'sin detalle'" }),
+    brand: Schema.string({ description: "Marca si es visible, o vacío" }),
+    quantity: Schema.number({ description: "Cantidad comprada (ej: 1, 2, 0.75)" }),
+    unitPrice: Schema.number({ description: "Precio unitario bruto" }),
+    discount: Schema.number({ description: "Descuento particular aplicado a esta línea" }),
+    lineTotal: Schema.number({ description: "Importe final de la línea después del descuento" }),
+    presentationValue: Schema.number({ description: "Valor numérico del peso/volumen/unidades (ej: 1 para 1 litro, 0.5 para 500g, 12 para docena)" }),
+    presentationUnit: Schema.string({ description: "Unidad de medida: 'kg', 'g', 'l', 'ml' o 'unidad'" }),
+    isDoubtful: Schema.boolean({ description: "True si el texto o número está borroso, roto o fue interpretado con duda" })
+  }
+});
+
+const receiptSchema = Schema.object({
+  properties: {
+    storeName: Schema.string({ description: "Nombre comercial. Si es un chino de barrio sin nombre claro, usar 'Chino + calle' (ej: 'Chino Roffo'). Cadenas: DIA, Vea, Malambo, etc." }),
+    receiptNumber: Schema.string({ description: "Número de comprobante" }),
+    dateString: Schema.string({ description: "Fecha y hora en formato YYYY-MM-DD HH:mm, o vacío si no se lee" }),
+    subtotal: Schema.number({ description: "Subtotal antes de descuentos globales" }),
+    discountsTotal: Schema.number({ description: "Suma total de descuentos globales o cupones" }),
+    totalPaid: Schema.number({ description: "Total efectivamente pagado en pesos argentinos (ARS)" }),
+    cashbackAmount: Schema.number({ description: "Reintegro o cashback de billetera/banco si figura, registrado aparte" }),
+    paymentMethod: Schema.string({ description: "Medio de pago: 'efectivo', 'debito', 'credito', 'qr_mercadopago', 'transferencia'. Si no se identifica, poner 'efectivo/transferencia'" }),
+    items: Schema.array({ items: lineItemSchema, description: "Listado de líneas de compra" }),
+    doubtfulNotes: Schema.array({ items: Schema.string(), description: "Notas sobre partes ilegibles, dudosas o que requieran revisión humana" })
+  }
+});
+
+const PROMPT_TICKET = `Analizá la imagen de este comprobante/ticket de compra de Gualeguaychú, Entre Ríos, Argentina (en pesos ARS).
+Extraé rigurosamente los datos respetando estas reglas:
+1. NUNCA inventes datos. Si algo es ilegible o dudoso, marcalo en doubtfulNotes y poné isDoubtful=true en el ítem.
+2. Comercios chinos de barrio: si no tienen marca corporativa, llamalos 'Chino + calle' (ej. Chino Roffo). Cadenas conocidas como DIA, Vea, Malambo o pollerías van por su nombre.
+3. Líneas genéricas sin descripción ('ALMACEN', 'VENTAS VARIAS', 'COMESTIBLES') se deben categorizar como 'sin detalle'.
+4. Distinguí matices: si son tapas de empanadas rotiseras no son lo mismo que comunes; si la leche es descremada o entera, indicalo.
+5. Medios de pago: si no se reconoce explícitamente, indicá 'efectivo/transferencia'.
+6. Reintegros o cashback: anotalos aparte en cashbackAmount sin alterar el total pagado del ticket.
+7. Calculá bien la presentación (ej: 500 gramos = 0.5 kg, 1 litro = 1.0 l, o cantidad de unidades).`;
+
+let receiptModel = null;
+function getReceiptModel() {
+  if (!receiptModel) {
+    const ai = getAI(app, { backend: new GoogleAIBackend() });
+    receiptModel = getGenerativeModel(ai, {
+      model: "gemini-3.8-flash",
+      generationConfig: { responseMimeType: "application/json", responseSchema: receiptSchema }
+    });
+  }
+  return receiptModel;
+}
+
+// Reduce la foto (los celulares sacan fotos enormes) y la pasa a base64 JPEG
+async function imagenABase64(file, maxLado = 1600) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("No se pudo leer la imagen"));
+      i.src = url;
+    });
+    const escala = Math.min(1, maxLado / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.naturalWidth * escala);
+    canvas.height = Math.round(img.naturalHeight * escala);
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function num(v, porDefecto = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : porDefecto;
+}
+
+async function leerTicketConGemini(file) {
+  const base64 = await imagenABase64(file);
+  const resultado = await Promise.race([
+    getReceiptModel().generateContent([
+      PROMPT_TICKET,
+      { inlineData: { data: base64, mimeType: "image/jpeg" } }
+    ]),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("La IA tardó demasiado (más de 60 segundos)")), 60000))
+  ]);
+  const json = JSON.parse(resultado.response.text());
+
+  const items = (json.items || []).map(it => {
+    const presVal = num(it.presentationValue, 1);
+    const lineTotal = num(it.lineTotal, num(it.quantity, 1) * num(it.unitPrice) - num(it.discount));
+    return {
+      rawDescription: it.rawDescription || "Ítem",
+      canonicalProductName: it.canonicalName || it.rawDescription || "sin detalle",
+      brand: it.brand || "",
+      quantity: num(it.quantity, 1),
+      unitPrice: num(it.unitPrice),
+      discount: num(it.discount),
+      lineTotal: lineTotal,
+      presentationValue: presVal,
+      presentationUnit: it.presentationUnit || "unidad",
+      unitPriceNormalized: presVal > 0 ? lineTotal / presVal : num(it.unitPrice),
+      isDoubtful: !!it.isDoubtful
+    };
+  });
+
+  // Fecha del ticket (si se pudo leer); si no, queda la fecha de carga
+  let fecha = null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(json.dateString || "");
+  if (m) {
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 12), +(m[5] || 0));
+    if (!isNaN(d.getTime())) fecha = Timestamp.fromDate(d);
+  }
+
+  const notas = (json.doubtfulNotes || []).filter(n => n && n.trim());
+  if (items.some(i => i.isDoubtful) && notas.length === 0) {
+    notas.push("Hay líneas que la IA marcó como dudosas: revisalas");
+  }
+
+  const totalPaid = num(json.totalPaid);
+  return {
+    storeName: json.storeName || "Comercio",
+    receiptNumber: json.receiptNumber || "",
+    date: fecha,
+    totalPaid: totalPaid,
+    subtotal: num(json.subtotal) || (totalPaid + num(json.discountsTotal)),
+    discountsTotal: num(json.discountsTotal),
+    cashbackAmount: num(json.cashbackAmount),
+    paymentMethod: json.paymentMethod || "efectivo/transferencia",
+    items: items,
+    doubtfulNotes: notas
+  };
+}
+
+fileReceiptInput.addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
+  if (!currentUser) { alert("Iniciá sesión primero."); return; }
   scanLoadingIndicator.style.display = "block";
-  // Simular lectura de imagen con Gemini AI estructurado
-  setTimeout(() => {
+  try {
+    const parsed = await leerTicketConGemini(file);
+    if (!parsed.items.length || parsed.totalPaid <= 0) {
+      throw new Error("La IA no pudo leer productos o el total del ticket. Probá con una foto más clara y de frente.");
+    }
+    await processParsedTicket(parsed);
+  } catch (err) {
+    console.error("Error leyendo ticket:", err);
+    alert("No se pudo leer el ticket.\n\nDetalle: " + (err && err.message ? err.message : err));
+  } finally {
     scanLoadingIndicator.style.display = "none";
-    processParsedTicket({
-      storeName: "Supermercado Vea",
-      receiptNumber: "0005-4421",
-      totalPaid: 4200.00,
-      subtotal: 4200.00,
-      discountsTotal: 0,
-      cashbackAmount: 0,
-      paymentMethod: "debito",
-      items: [
-        { rawDescription: "PECHUGA DE POLLO KG", canonicalProductName: "Pechuga de pollo", quantity: 1.5, unitPrice: 2800, lineTotal: 4200, presentationValue: 1.5, presentationUnit: "kg", unitPriceNormalized: 2800 }
-      ],
-      doubtfulNotes: []
-    });
-  }, 1200);
+    fileReceiptInput.value = "";
+  }
 });
 
 async function processParsedTicket(parsed) {
@@ -616,7 +770,7 @@ async function processParsedTicket(parsed) {
     householdId: hId,
     storeName: parsed.storeName,
     receiptNumber: parsed.receiptNumber || "",
-    date: serverTimestamp(),
+    date: parsed.date || serverTimestamp(),
     subtotal: parsed.subtotal || parsed.totalPaid,
     discountsTotal: parsed.discountsTotal || 0,
     totalPaid: parsed.totalPaid,
@@ -647,6 +801,9 @@ async function processParsedTicket(parsed) {
       presentationValue: item.presentationValue || 1,
       presentationUnit: item.presentationUnit || "unidad",
       unitPriceNormalized: item.unitPriceNormalized || item.unitPrice,
+      brand: item.brand || "",
+      discount: item.discount || 0,
+      isDoubtful: !!item.isDoubtful,
       memberUids: memberUids,
       createdAt: serverTimestamp()
     });
