@@ -1,0 +1,22 @@
+{
+  "name": "Finanzas Hogar Gualeguaychú",
+  "short_name": "Finanzas Hogar",
+  "description": "Sistema de gestión de finanzas para el hogar en Gualeguaychú con digitalización de tickets por IA",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0F172A",
+  "theme_color": "#0F766E",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
