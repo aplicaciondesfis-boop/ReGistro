@@ -74,6 +74,12 @@ const modalSettings = document.getElementById("modalSettings");
 const fileReceiptInput = document.getElementById("fileReceiptInput");
 const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
+// Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
+const versionTag = document.createElement("div");
+versionTag.textContent = "lectura real v3 - 27/10";
+versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
+document.body.appendChild(versionTag);
+
 // Registrar Service Worker para PWA
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration:', err));
@@ -562,6 +568,7 @@ document.getElementById("btnNewObligation").addEventListener("click", async () =
 
 // Muestras de tickets para prueba inmediata
 document.getElementById("btnSampleDia").addEventListener("click", () => {
+  if (!confirm("OJO: este botón carga un ticket de EJEMPLO con datos falsos, no lee tu foto. ¿Cargar igual?")) return;
   processParsedTicket({
     storeName: "DIA%",
     receiptNumber: "0002-1249",
@@ -579,6 +586,7 @@ document.getElementById("btnSampleDia").addEventListener("click", () => {
 });
 
 document.getElementById("btnSampleChino").addEventListener("click", () => {
+  if (!confirm("OJO: este botón carga un ticket de EJEMPLO con datos falsos, no lee tu foto. ¿Cargar igual?")) return;
   processParsedTicket({
     storeName: "Chino Roffo",
     receiptNumber: "",
