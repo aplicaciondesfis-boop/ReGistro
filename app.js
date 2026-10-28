@@ -77,7 +77,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "lectura real v4 - 28/10";
+versionTag.textContent = "lectura real v5 - 28/10";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 
@@ -648,16 +648,24 @@ Extraé rigurosamente los datos respetando estas reglas:
 6. Reintegros o cashback: anotalos aparte en cashbackAmount sin alterar el total pagado del ticket.
 7. Calculá bien la presentación (ej: 500 gramos = 0.5 kg, 1 litro = 1.0 l, o cantidad de unidades).`;
 
-let receiptModel = null;
-function getReceiptModel() {
-  if (!receiptModel) {
+// Si el modelo principal está saturado ("high demand"), se prueba con los siguientes
+const MODELOS_TICKET = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
+const modelosCache = {};
+function getReceiptModel(nombre) {
+  if (!modelosCache[nombre]) {
     const ai = getAI(app, { backend: new GoogleAIBackend() });
-    receiptModel = getGenerativeModel(ai, {
-      model: "gemini-3.8-flash",
+    modelosCache[nombre] = getGenerativeModel(ai, {
+      model: nombre,
       generationConfig: { responseMimeType: "application/json", responseSchema: receiptSchema }
     });
   }
-  return receiptModel;
+  return modelosCache[nombre];
+}
+
+// ¿Es un error pasajero (saturación, límite, timeout) que vale la pena reintentar?
+function esErrorTemporal(e) {
+  const m = String((e && e.message) || e);
+  return /\[(429|500|502|503|504)\b|high demand|overloaded|unavailable|demasiado|tardó/i.test(m);
 }
 
 // Reduce la foto (los celulares sacan fotos enormes) y la pasa a base64 JPEG
@@ -706,14 +714,31 @@ async function leerTicketConGemini(file) {
     }
   }
 
-  const resultado = await Promise.race([
-    getReceiptModel().generateContent([
-      PROMPT_TICKET,
-      { inlineData: { data: base64, mimeType: "image/jpeg" } }
-    ]),
-    new Promise((_, rej) => setTimeout(() => rej(new Error("La IA tardó más de 90 segundos (App Check sí funcionó, el problema está en la llamada a Gemini)")), 90000))
-  ]);
-  console.log("Gemini respondió en " + seg());
+  let resultado = null;
+  let ultimoError = null;
+  for (let i = 0; i < MODELOS_TICKET.length; i++) {
+    const nombre = MODELOS_TICKET[i];
+    try {
+      console.log("Probando modelo " + nombre + " (intento " + (i + 1) + ")...");
+      resultado = await Promise.race([
+        getReceiptModel(nombre).generateContent([
+          PROMPT_TICKET,
+          { inlineData: { data: base64, mimeType: "image/jpeg" } }
+        ]),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("La IA tardó demasiado (más de 45 segundos)")), 45000))
+      ]);
+      console.log("Gemini (" + nombre + ") respondió en " + seg());
+      break;
+    } catch (e) {
+      ultimoError = e;
+      console.warn("Falló " + nombre + ":", e && e.message ? e.message : e);
+      if (!esErrorTemporal(e)) throw e;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  if (!resultado) {
+    throw new Error("Gemini está saturado en este momento. Probá de nuevo en unos minutos. (" + (ultimoError && ultimoError.message ? ultimoError.message : ultimoError) + ")");
+  }
   const json = JSON.parse(resultado.response.text());
 
   const items = (json.items || []).map(it => {
