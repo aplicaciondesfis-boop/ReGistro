@@ -77,7 +77,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "lectura real v5 - 28/10";
+versionTag.textContent = "lectura real v6 - 28/10";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 
@@ -271,13 +271,22 @@ function renderPurchases() {
           </div>
           <div style="text-align: right;">
             <div class="card-price">$${(p.totalPaid || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>
+            ${p.discountsTotal > 0 ? `<div class="card-meta" style="color: var(--secondary)">Descuentos: -$${p.discountsTotal.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>` : ''}
             ${p.cashbackAmount > 0 ? `<div class="card-meta" style="color: var(--secondary)">Reintegro: $${p.cashbackAmount.toFixed(2)}</div>` : ''}
           </div>
         </div>
+        ${!isReview ? `
+          <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
+            <button class="btn-secondary" style="color: var(--danger); padding: 4px 10px; font-size: 0.75rem;" onclick="window.deletePurchase('${p.id}')">🗑 Eliminar</button>
+          </div>
+        ` : ''}
         ${isReview ? `
           <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
             <span class="badge-pill warning">⚠️ Requiere revisión</span>
-            <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="window.approvePurchase('${p.id}')">Aprobar</button>
+            <span style="display: flex; gap: 6px;">
+              <button class="btn-secondary" style="color: var(--danger); padding: 4px 10px; font-size: 0.75rem;" onclick="window.deletePurchase('${p.id}')">🗑 Eliminar</button>
+              <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="window.approvePurchase('${p.id}')">Aprobar</button>
+            </span>
           </div>
         ` : ''}
       </div>
@@ -435,8 +444,17 @@ window.approvePurchase = async (id) => {
 };
 
 window.deletePurchase = async (id) => {
-  if (confirm("¿Estás seguro de eliminar este comprobante?")) {
-    await deleteDoc(doc(db, "purchases", id));
+  const p = purchases.find(x => x.id === id);
+  const detalle = p ? ` de ${p.storeName || "comercio"} por $${(p.totalPaid || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "";
+  if (!confirm(`¿Eliminar el comprobante${detalle}?\n\nSe borra también el detalle de sus productos. No se puede deshacer.`)) return;
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, "purchases", id));
+    purchaseItems.filter(i => i.purchaseId === id).forEach(i => batch.delete(doc(db, "purchase_items", i.id)));
+    await batch.commit();
+  } catch (err) {
+    console.error("Error al eliminar:", err);
+    alert("No se pudo eliminar.\n\nDetalle: " + (err && err.message ? err.message : err));
   }
 };
 
@@ -613,12 +631,12 @@ const lineItemSchema = Schema.object({
     rawDescription: Schema.string({ description: "Descripción textual del producto tal cual figura en el ticket" }),
     canonicalName: Schema.string({ description: "Nombre genérico normalizado (ej: 'Tapas de empanadas rotiseras', 'Leche entera', 'Pechuga de pollo'). Si no tiene detalle (ej: 'ALMACEN', 'VARIOS'), escribir 'sin detalle'" }),
     brand: Schema.string({ description: "Marca si es visible, o vacío" }),
-    quantity: Schema.number({ description: "Cantidad comprada (ej: 1, 2, 0.75)" }),
-    unitPrice: Schema.number({ description: "Precio unitario bruto" }),
-    discount: Schema.number({ description: "Descuento particular aplicado a esta línea" }),
-    lineTotal: Schema.number({ description: "Importe final de la línea después del descuento" }),
-    presentationValue: Schema.number({ description: "Valor numérico del peso/volumen/unidades (ej: 1 para 1 litro, 0.5 para 500g, 12 para docena)" }),
-    presentationUnit: Schema.string({ description: "Unidad de medida: 'kg', 'g', 'l', 'ml' o 'unidad'" }),
+    quantity: Schema.number({ description: "Cantidad comprada. Para productos por peso es el peso (ej: 0.75 kg de jamón). Para el resto, las unidades (ej: 1, 2, 3)" }),
+    unitPrice: Schema.number({ description: "Precio de UNA unidad (o de UN kg si se vende por peso) SIN descuento, tal como figura en el ticket" }),
+    discount: Schema.number({ description: "Descuento aplicado SOLO a esta línea, como número POSITIVO en pesos (0 si no hay). Si el ticket lo muestra como renglón negativo justo debajo del producto, va acá" }),
+    lineTotal: Schema.number({ description: "Importe final de la línea = quantity x unitPrice - discount" }),
+    presentationValue: Schema.number({ description: "Contenido de UNA sola unidad del producto, expresado en presentationUnit (ej: 1 para una botella de 1 litro, 0.5 para un paquete de 500 g, 1 para algo que se vende por unidad o por kg). NO multiplicar por la cantidad comprada" }),
+    presentationUnit: Schema.string({ description: "Unidad de medida, siempre convertida a: 'kg', 'l' o 'unidad' (nunca 'g' ni 'ml')" }),
     isDoubtful: Schema.boolean({ description: "True si el texto o número está borroso, roto o fue interpretado con duda" })
   }
 });
@@ -628,9 +646,9 @@ const receiptSchema = Schema.object({
     storeName: Schema.string({ description: "Nombre comercial. Si es un chino de barrio sin nombre claro, usar 'Chino + calle' (ej: 'Chino Roffo'). Cadenas: DIA, Vea, Malambo, etc." }),
     receiptNumber: Schema.string({ description: "Número de comprobante" }),
     dateString: Schema.string({ description: "Fecha y hora en formato YYYY-MM-DD HH:mm, o vacío si no se lee" }),
-    subtotal: Schema.number({ description: "Subtotal antes de descuentos globales" }),
-    discountsTotal: Schema.number({ description: "Suma total de descuentos globales o cupones" }),
-    totalPaid: Schema.number({ description: "Total efectivamente pagado en pesos argentinos (ARS)" }),
+    subtotal: Schema.number({ description: "Suma de los importes finales de las líneas (ya con sus descuentos de línea), antes de los descuentos globales" }),
+    discountsTotal: Schema.number({ description: "Descuentos GLOBALES del ticket (cupones, promos sobre el total, descuento por medio de pago, jubilados), como número POSITIVO. NO incluir los descuentos que ya anotaste en cada línea" }),
+    totalPaid: Schema.number({ description: "Total final que se pagó en pesos argentinos (ARS) = subtotal - discountsTotal. Es el TOTAL del ticket, no el efectivo entregado ni el vuelto" }),
     cashbackAmount: Schema.number({ description: "Reintegro o cashback de billetera/banco si figura, registrado aparte" }),
     paymentMethod: Schema.string({ description: "Medio de pago: 'efectivo', 'debito', 'credito', 'qr_mercadopago', 'transferencia'. Si no se identifica, poner 'efectivo/transferencia'" }),
     items: Schema.array({ items: lineItemSchema, description: "Listado de líneas de compra" }),
@@ -646,7 +664,11 @@ Extraé rigurosamente los datos respetando estas reglas:
 4. Distinguí matices: si son tapas de empanadas rotiseras no son lo mismo que comunes; si la leche es descremada o entera, indicalo.
 5. Medios de pago: si no se reconoce explícitamente, indicá 'efectivo/transferencia'.
 6. Reintegros o cashback: anotalos aparte en cashbackAmount sin alterar el total pagado del ticket.
-7. Calculá bien la presentación (ej: 500 gramos = 0.5 kg, 1 litro = 1.0 l, o cantidad de unidades).`;
+7. Calculá bien la presentación de UNA unidad, siempre en kg, l o unidad (ej: 500 gramos = 0.5 kg, 1 litro = 1 l). Para productos que se venden por peso, quantity es el peso, presentationValue es 1 y presentationUnit es 'kg'.
+8. Números argentinos: el punto separa miles y la coma separa decimales. '1.234,50' significa 1234.50 y '950,00' significa 950. Devolvé siempre números normales (sin separador de miles).
+9. Descuentos: en los tickets suelen aparecer como renglones con signo negativo o palabras como DESC, DTO, PROMO, 2x1, AHORRO, CUPON. Si el renglón corresponde claramente a un producto, restalo de ESA línea (campo discount, número positivo). Si es un descuento sobre el total, va en discountsTotal. Nunca cuentes el mismo descuento dos veces y nunca pongas descuentos como productos.
+10. Los importes de IVA, impuestos y redondeos que ya están incluidos en el total no son productos ni descuentos: ignoralos.
+11. Antes de responder verificá la cuenta: la suma de los lineTotal menos discountsTotal tiene que dar totalPaid. Si no da, releé el ticket; si la diferencia persiste, explicalo en doubtfulNotes.`;
 
 // Si el modelo principal está saturado ("high demand"), se prueba con los siguientes
 const MODELOS_TICKET = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
@@ -742,19 +764,20 @@ async function leerTicketConGemini(file) {
   const json = JSON.parse(resultado.response.text());
 
   const items = (json.items || []).map(it => {
-    const presVal = num(it.presentationValue, 1);
-    const lineTotal = num(it.lineTotal, num(it.quantity, 1) * num(it.unitPrice) - num(it.discount));
+    const presVal = num(it.presentationValue, 1) > 0 ? num(it.presentationValue, 1) : 1;
+    const descLinea = Math.abs(num(it.discount));
+    const lineTotal = num(it.lineTotal, num(it.quantity, 1) * num(it.unitPrice) - descLinea);
     return {
       rawDescription: it.rawDescription || "Ítem",
       canonicalProductName: it.canonicalName || it.rawDescription || "sin detalle",
       brand: it.brand || "",
       quantity: num(it.quantity, 1),
       unitPrice: num(it.unitPrice),
-      discount: num(it.discount),
+      discount: descLinea,
       lineTotal: lineTotal,
       presentationValue: presVal,
       presentationUnit: it.presentationUnit || "unidad",
-      unitPriceNormalized: presVal > 0 ? lineTotal / presVal : num(it.unitPrice),
+      unitPriceNormalized: 0, // se calcula al reconciliar
       isDoubtful: !!it.isDoubtful
     };
   });
@@ -773,18 +796,74 @@ async function leerTicketConGemini(file) {
   }
 
   const totalPaid = num(json.totalPaid);
-  return {
+  return reconciliarTicket({
     storeName: json.storeName || "Comercio",
     receiptNumber: json.receiptNumber || "",
     date: fecha,
     totalPaid: totalPaid,
-    subtotal: num(json.subtotal) || (totalPaid + num(json.discountsTotal)),
-    discountsTotal: num(json.discountsTotal),
+    subtotal: num(json.subtotal),
+    discountsTotal: Math.abs(num(json.discountsTotal)),
     cashbackAmount: num(json.cashbackAmount),
     paymentMethod: json.paymentMethod || "efectivo/transferencia",
     items: items,
     doubtfulNotes: notas
-  };
+  });
+}
+
+// -------------------------------------------------------------
+// CONTROL MATEMÁTICO DEL TICKET (no confía a ciegas en la IA)
+// -------------------------------------------------------------
+function reconciliarTicket(t) {
+  const plata = (n) => "$" + n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const items = t.items;
+  const total = t.totalPaid;
+  const tol = Math.max(2, total * 0.005); // tolerancia: $2 o 0,5%
+  const cerca = (a, b) => Math.abs(a - b) <= tol;
+
+  const sumNeto = items.reduce((a, i) => a + i.lineTotal, 0);                 // líneas ya con su descuento
+  const sumBruto = items.reduce((a, i) => a + i.quantity * i.unitPrice, 0);   // líneas sin descuento
+  const sumDescLinea = items.reduce((a, i) => a + i.discount, 0);
+  const dGlobal = t.discountsTotal;
+
+  let ahorro = sumDescLinea + dGlobal;
+  let cuadra = true;
+
+  if (cerca(sumNeto - dGlobal, total)) {
+    // Caso normal: líneas netas, y el descuento global se resta aparte
+    ahorro = sumDescLinea + dGlobal;
+  } else if (cerca(sumNeto, total)) {
+    // Las líneas ya traen aplicado el descuento global
+    ahorro = dGlobal > 0 ? Math.max(dGlobal, sumDescLinea) : sumDescLinea;
+  } else if (cerca(sumBruto - sumDescLinea - dGlobal, total)) {
+    // La IA calculó mal los importes de línea: se recalculan
+    items.forEach(i => { i.lineTotal = i.quantity * i.unitPrice - i.discount; });
+    ahorro = sumDescLinea + dGlobal;
+  } else if (cerca(sumBruto - dGlobal, total)) {
+    items.forEach(i => { i.lineTotal = i.quantity * i.unitPrice; i.discount = 0; });
+    ahorro = dGlobal;
+  } else if (cerca(sumBruto - sumDescLinea, total)) {
+    items.forEach(i => { i.lineTotal = i.quantity * i.unitPrice - i.discount; });
+    ahorro = sumDescLinea;
+  } else {
+    cuadra = false;
+    t.doubtfulNotes.push(
+      "La cuenta no cierra: las líneas suman " + plata(sumNeto) +
+      (dGlobal > 0 ? ", menos descuentos globales " + plata(dGlobal) : "") +
+      ", pero el total del ticket es " + plata(total) + ". Revisá productos y descuentos."
+    );
+  }
+
+  // Precio normalizado por kg / litro / unidad (precio de UNA unidad dividido su contenido)
+  items.forEach(i => {
+    const cant = i.quantity > 0 ? i.quantity : 1;
+    const contenido = i.presentationValue > 0 ? i.presentationValue : 1;
+    i.unitPriceNormalized = (i.lineTotal / cant) / contenido;
+  });
+
+  t.discountsTotal = Math.round(ahorro * 100) / 100;       // ahorro total del ticket
+  t.subtotal = Math.round((total + ahorro) * 100) / 100;   // precio de lista, antes de todos los descuentos
+  t.reconciliado = cuadra;
+  return t;
 }
 
 fileReceiptInput.addEventListener("change", async (e) => {
@@ -808,6 +887,20 @@ fileReceiptInput.addEventListener("change", async (e) => {
 });
 
 async function processParsedTicket(parsed) {
+  // Aviso de posible ticket repetido (mismo comercio, mismo total y mismo día)
+  const diaDe = (f) => {
+    const d = f ? (f.toDate ? f.toDate() : new Date(f)) : new Date();
+    return d.toLocaleDateString("es-AR");
+  };
+  const repetido = purchases.find(p =>
+    (p.storeName || "").trim().toLowerCase() === (parsed.storeName || "").trim().toLowerCase() &&
+    Math.abs((p.totalPaid || 0) - parsed.totalPaid) < 0.01 &&
+    diaDe(p.date) === diaDe(parsed.date)
+  );
+  if (repetido && !confirm("Ya hay un comprobante de " + parsed.storeName + " por $" + parsed.totalPaid.toLocaleString("es-AR", { minimumFractionDigits: 2 }) + " con la misma fecha.\n\n¿Cargarlo igual? (Aceptar = cargar, Cancelar = no cargar)")) {
+    modalScan.style.display = "none";
+    return;
+  }
   modalScan.style.display = "none";
   const isPersonal = activeSpace === "personal";
   const hId = isPersonal ? "personal" : currentHousehold.id;
@@ -816,7 +909,7 @@ async function processParsedTicket(parsed) {
   // Chequeo matemático
   const sumLines = parsed.items.reduce((acc, i) => acc + i.lineTotal, 0);
   const mathDiff = Math.abs(sumLines - parsed.totalPaid);
-  const isDoubtful = mathDiff > 2.0 || parsed.doubtfulNotes.length > 0;
+  const isDoubtful = parsed.doubtfulNotes.length > 0 || (!parsed.reconciliado && mathDiff > 2.0);
 
   const purchaseRef = doc(collection(db, "purchases"));
   const purchase = {
@@ -831,7 +924,7 @@ async function processParsedTicket(parsed) {
     effectiveCost: (parsed.totalPaid - (parsed.cashbackAmount || 0)),
     paymentMethod: parsed.paymentMethod || "efectivo/transferencia",
     status: isDoubtful ? "a_revisar" : "confirmado",
-    reviewNotes: isDoubtful ? (parsed.doubtfulNotes || [`Diferencia de sumas: líneas suman $${sumLines.toFixed(2)} vs total $${parsed.totalPaid.toFixed(2)}`]) : [],
+    reviewNotes: isDoubtful ? (parsed.doubtfulNotes.length ? parsed.doubtfulNotes : [`Diferencia de sumas: líneas suman $${sumLines.toFixed(2)} vs total $${parsed.totalPaid.toFixed(2)}`]) : [],
     createdByUid: currentUser.uid,
     lastModifiedByUid: currentUser.uid,
     memberUids: memberUids,
