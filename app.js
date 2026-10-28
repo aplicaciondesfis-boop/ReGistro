@@ -38,7 +38,7 @@ const app = initializeApp(firebaseConfig);
 // APP CHECK (obligatorio para usar la IA de Firebase desde el 2/11/2026)
 // Pegá acá la "clave del sitio" de reCAPTCHA Enterprise (ver guía).
 // ---------------------------------------------------------------
-const APPCHECK_SITE_KEY = "PEGAR_ACA_LA_CLAVE_DE_RECAPTCHA";
+const APPCHECK_SITE_KEY = "6LeBGgUuAAAAANK29mh3T7em1UooCbtFKaUdNRS5";
 const appCheckActivo = APPCHECK_SITE_KEY && !APPCHECK_SITE_KEY.startsWith("PEGAR");
 if (appCheckActivo) {
   initializeAppCheck(app, {
