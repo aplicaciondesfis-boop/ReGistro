@@ -17,7 +17,7 @@ import {
   writeBatch 
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
 
-import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app-check.js";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken as getAppCheckToken } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app-check.js";
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
 
 // Configuración del proyecto aprovisionado en Firebase
@@ -40,8 +40,9 @@ const app = initializeApp(firebaseConfig);
 // ---------------------------------------------------------------
 const APPCHECK_SITE_KEY = "6LeBGgUuAAAAANK29mh3T7em1UooCbtFKaUdNRS5";
 const appCheckActivo = APPCHECK_SITE_KEY && !APPCHECK_SITE_KEY.startsWith("PEGAR");
+let appCheckInstance = null;
 if (appCheckActivo) {
-  initializeAppCheck(app, {
+  appCheckInstance = initializeAppCheck(app, {
     provider: new ReCaptchaEnterpriseProvider(APPCHECK_SITE_KEY),
     isTokenAutoRefreshEnabled: true
   });
@@ -76,7 +77,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "lectura real v3 - 27/10";
+versionTag.textContent = "lectura real v4 - 28/10";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 
@@ -686,14 +687,33 @@ function num(v, porDefecto = 0) {
 }
 
 async function leerTicketConGemini(file) {
+  const t0 = performance.now();
+  const seg = () => ((performance.now() - t0) / 1000).toFixed(1) + " s";
+
   const base64 = await imagenABase64(file);
+  console.log("Foto preparada en " + seg() + " (" + Math.round(base64.length / 1024) + " KB)");
+
+  // Paso de diagnóstico: pedir el permiso anti-abuso (App Check) antes de llamar a la IA
+  if (appCheckInstance) {
+    try {
+      await Promise.race([
+        getAppCheckToken(appCheckInstance, false),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("tiempo agotado (más de 20 segundos)")), 20000))
+      ]);
+      console.log("App Check OK en " + seg());
+    } catch (e) {
+      throw new Error("Falló el permiso anti-abuso (App Check) a los " + seg() + ": " + (e && e.message ? e.message : e));
+    }
+  }
+
   const resultado = await Promise.race([
     getReceiptModel().generateContent([
       PROMPT_TICKET,
       { inlineData: { data: base64, mimeType: "image/jpeg" } }
     ]),
-    new Promise((_, rej) => setTimeout(() => rej(new Error("La IA tardó demasiado (más de 60 segundos)")), 60000))
+    new Promise((_, rej) => setTimeout(() => rej(new Error("La IA tardó más de 90 segundos (App Check sí funcionó, el problema está en la llamada a Gemini)")), 90000))
   ]);
+  console.log("Gemini respondió en " + seg());
   const json = JSON.parse(resultado.response.text());
 
   const items = (json.items || []).map(it => {
