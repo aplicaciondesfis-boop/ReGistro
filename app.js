@@ -77,7 +77,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "lectura real v6 - 28/10";
+versionTag.textContent = "lectura real v7 - 28/10";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 
@@ -272,11 +272,12 @@ function renderPurchases() {
           <div style="text-align: right;">
             <div class="card-price">$${(p.totalPaid || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>
             ${p.discountsTotal > 0 ? `<div class="card-meta" style="color: var(--secondary)">Descuentos: -$${p.discountsTotal.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>` : ''}
-            ${p.cashbackAmount > 0 ? `<div class="card-meta" style="color: var(--secondary)">Reintegro: $${p.cashbackAmount.toFixed(2)}</div>` : ''}
+            ${p.cashbackAmount > 0 ? `<div class="card-meta" style="color: var(--secondary)">Reintegro: $${p.cashbackAmount.toLocaleString("es-AR", { minimumFractionDigits: 2 })} (${(p.cashbackAmount / (p.totalPaid || 1) * 100).toFixed(2).replace(".", ",")}%)</div>` : ''}
           </div>
         </div>
         ${!isReview ? `
-          <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
+          <div style="margin-top: 8px; display: flex; justify-content: flex-end; gap: 6px;">
+            <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="window.editarReintegro('${p.id}')">💸 ${p.cashbackAmount > 0 ? 'Editar reintegro' : 'Agregar reintegro'}</button>
             <button class="btn-secondary" style="color: var(--danger); padding: 4px 10px; font-size: 0.75rem;" onclick="window.deletePurchase('${p.id}')">🗑 Eliminar</button>
           </div>
         ` : ''}
@@ -284,6 +285,7 @@ function renderPurchases() {
           <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
             <span class="badge-pill warning">⚠️ Requiere revisión</span>
             <span style="display: flex; gap: 6px;">
+              <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="window.editarReintegro('${p.id}')">💸 Reintegro</button>
               <button class="btn-secondary" style="color: var(--danger); padding: 4px 10px; font-size: 0.75rem;" onclick="window.deletePurchase('${p.id}')">🗑 Eliminar</button>
               <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="window.approvePurchase('${p.id}')">Aprobar</button>
             </span>
@@ -292,6 +294,14 @@ function renderPurchases() {
       </div>
     `;
   }).join("");
+}
+
+// Factor por el que se multiplican los precios de un ticket para reflejar su reintegro
+// (ej: reintegro de $9.500 sobre un ticket de $50.087 => factor 0,8103, o sea 18,97% más barato)
+function factorReintegro(purchaseId) {
+  const p = purchases.find(x => x.id === purchaseId);
+  if (!p || !(p.totalPaid > 0) || !(p.cashbackAmount > 0)) return 1;
+  return Math.max(0, 1 - Math.min(1, p.cashbackAmount / p.totalPaid));
 }
 
 function renderPriceComparison() {
@@ -309,7 +319,7 @@ function renderPriceComparison() {
 
   const rows = Object.keys(groups).map(key => {
     const items = groups[key];
-    const prices = items.map(i => i.unitPriceNormalized || i.unitPrice || 0).filter(p => p > 0);
+    const prices = items.map(i => (i.unitPriceNormalized || i.unitPrice || 0) * factorReintegro(i.purchaseId)).filter(p => p > 0);
     const min = prices.length ? Math.min(...prices) : 0;
     const max = prices.length ? Math.max(...prices) : 0;
     const avg = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : 0;
@@ -333,7 +343,8 @@ function renderPriceComparison() {
   }
 
   container.innerHTML = rows.map(r => {
-    const storeText = r.stores.length > 1 ? `Varias (${r.stores.length} comercios)` : (r.stores[0] || "Comercio");
+    const storeText = (r.stores.length > 1 ? `Varias (${r.stores.length} comercios)` : (r.stores[0] || "Comercio"))
+      + (r.items.some(i => factorReintegro(i.purchaseId) < 1) ? " • precio real con reintegro" : "");
     return `
       <div class="card-item" style="cursor: pointer;" onclick="this.querySelector('.history-detail').style.display = this.querySelector('.history-detail').style.display === 'none' ? 'block' : 'none'">
         <div class="card-header">
@@ -348,12 +359,19 @@ function renderPriceComparison() {
         </div>
         <div class="history-detail" style="display: none; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px;">
           <div style="font-weight: 600; font-size: 0.8rem; color: var(--primary); margin-bottom: 6px;">Historial de compras:</div>
-          ${r.items.map(i => `
+          ${r.items.map(i => {
+            const f = factorReintegro(i.purchaseId);
+            const norm = (i.unitPriceNormalized || i.unitPrice || 0) * f;
+            const pagado = (i.lineTotal || 0);
+            const textoPrecio = f < 1
+              ? `$${pagado.toFixed(2)} → real $${(pagado * f).toFixed(2)} ($${norm.toFixed(2)}/u)`
+              : `$${pagado.toFixed(2)} ($${norm.toFixed(2)}/u)`;
+            return `
             <div style="display: flex; justify-content: space-between; font-size: 0.8rem; padding: 3px 0;">
               <span>${escapeHtml(i.rawDescription)} (Cant: ${i.quantity || 1})</span>
-              <strong>$${(i.lineTotal || 0).toFixed(2)} ($${(i.unitPriceNormalized || i.unitPrice || 0).toFixed(2)}/u)</strong>
-            </div>
-          `).join("")}
+              <strong>${textoPrecio}</strong>
+            </div>`;
+          }).join("")}
         </div>
       </div>
     `;
@@ -441,6 +459,67 @@ function renderReviewQueue() {
 // -------------------------------------------------------------
 window.approvePurchase = async (id) => {
   await updateDoc(doc(db, "purchases", id), { status: "confirmado" });
+};
+
+// Convierte lo que escribe la persona ("9500", "9.500", "9.500,50", "$ 9500") en un número
+function parseMonto(txt) {
+  let t = String(txt).replace(/[$\s]/g, "");
+  if (t === "") return null;
+  if (t.includes(".") && t.includes(",")) {
+    t = t.replace(/\./g, "").replace(",", ".");
+  } else if (t.includes(",")) {
+    t = t.replace(",", ".");
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(t)) {
+    t = t.replace(/\./g, "");
+  }
+  const n = Number(t);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+// Agregar, cambiar o quitar el reintegro (cashback) de un comprobante
+window.editarReintegro = async (id) => {
+  const p = purchases.find(x => x.id === id);
+  if (!p) return;
+  const total = p.totalPaid || 0;
+  const fmt = (n) => n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const actual = p.cashbackAmount > 0 ? String(p.cashbackAmount).replace(".", ",") : "";
+
+  const txt = prompt(
+    `${p.storeName || "Comprobante"} por $${fmt(total)}\n\n¿Cuánto te reintegraron, en pesos? (ejemplo: 9500)\nPoné 0 para quitar el reintegro.`,
+    actual
+  );
+  if (txt === null) return;
+
+  const monto = parseMonto(txt);
+  if (monto === null || monto < 0) {
+    alert("No entendí ese monto. Escribí solo el número, por ejemplo: 9500");
+    return;
+  }
+  if (monto > total) {
+    alert("El reintegro no puede ser mayor al total del comprobante ($" + fmt(total) + ").");
+    return;
+  }
+
+  const pct = total > 0 ? (monto / total) * 100 : 0;
+  if (monto > 0) {
+    const ok = confirm(
+      `Reintegro: $${fmt(monto)} = ${pct.toFixed(2).replace(".", ",")}% del ticket.\n` +
+      `Costo real de la compra: $${fmt(total - monto)}\n\n` +
+      `Todos los productos de este ticket se van a mostrar con ese porcentaje menos en la comparación de precios.\n\n¿Guardar?`
+    );
+    if (!ok) return;
+  }
+
+  try {
+    await updateDoc(doc(db, "purchases", id), {
+      cashbackAmount: monto,
+      effectiveCost: total - monto,
+      lastModifiedByUid: currentUser.uid
+    });
+  } catch (err) {
+    console.error("Error guardando reintegro:", err);
+    alert("No se pudo guardar el reintegro.\n\nDetalle: " + (err && err.message ? err.message : err));
+  }
 };
 
 window.deletePurchase = async (id) => {
