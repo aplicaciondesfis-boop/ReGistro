@@ -59,6 +59,15 @@ let purchases = [];
 let purchaseItems = [];
 let obligations = [];
 
+// Categorías oficiales de productos (las mismas que usabas en tus planillas)
+const CATEGORIAS = ["Almacén", "Bebidas", "Carnes", "Frutas y verduras", "Golosinas y snacks", "Higiene personal", "Hogar", "Limpieza", "Lácteos y fiambres", "Panificados y harinas", "Sin detalle"];
+window.CATEGORIAS = CATEGORIAS; // el frontend puede usar esta misma lista (por ejemplo en el formulario de gasto manual)
+const sinAcentos = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+function normalizarCategoria(txt) {
+  const k = sinAcentos(txt);
+  return CATEGORIAS.find(c => sinAcentos(c) === k) || "Sin detalle";
+}
+
 // Elementos de la interfaz
 const authScreen = document.getElementById("authScreen");
 const mainContent = document.getElementById("mainContent");
@@ -77,7 +86,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "lectura real v7 - 28/10 · diseño v1 - 01/11";
+versionTag.textContent = "lectura real v8 - 02/11 · diseño v1 - 01/11";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 
@@ -432,7 +441,7 @@ function detalleCompra(p) {
   const revisar = p.status === "a_revisar";
   const filas = items.map(i => `
     <tr>
-      <td>${esc(i.rawDescription || i.canonicalProductName)}${i.isDoubtful ? ' <span class="badge-pill warning">dudoso</span>' : ""}</td>
+      <td>${esc(i.rawDescription || i.canonicalProductName)}${i.isDoubtful ? ' <span class="badge-pill warning">dudoso</span>' : ""}<br><button class="btn-chico" onclick="window.editarCategoria('${i.id}')">🏷 ${esc(categoriaDe(i))} ✎</button></td>
       <td class="num">${numEs(i.quantity || 1, 3)}</td>
       <td class="num hide-sm">${moneda(i.unitPrice)}</td>
       <td class="num hide-sm">${i.discount > 0 ? "-" + moneda(i.discount) : "—"}</td>
@@ -949,6 +958,353 @@ window.toggleObligation = async (id, currentStatus) => {
 };
 
 // -------------------------------------------------------------
+// CATEGORÍAS: corregir a mano y completar las que faltan con IA
+// -------------------------------------------------------------
+async function guardarCategorias(items, categoria) {
+  for (let k = 0; k < items.length; k += 400) {
+    const batch = writeBatch(db);
+    items.slice(k, k + 400).forEach(i => batch.update(doc(db, "purchase_items", i.id), { category: categoria }));
+    await batch.commit();
+  }
+}
+
+// Cambiar la categoría de un producto (y, si querés, de todos los que se llaman igual)
+window.editarCategoria = async (itemId) => {
+  const it = purchaseItems.find(x => x.id === itemId);
+  if (!it) return;
+  const nombre = it.canonicalProductName || it.rawDescription || "producto";
+  const lista = CATEGORIAS.map((c, k) => `${k + 1}) ${c}`).join("\n");
+  const resp = prompt(`Categoría de «${nombre}»\nActual: ${categoriaDe(it)}\n\n${lista}\n\nEscribí el NÚMERO de la categoría (o un nombre nuevo):`);
+  if (resp === null) return;
+  const t = resp.trim();
+  if (!t) return;
+  let nueva;
+  if (/^\d+$/.test(t) && +t >= 1 && +t <= CATEGORIAS.length) nueva = CATEGORIAS[+t - 1];
+  else nueva = CATEGORIAS.find(c => sinAcentos(c) === sinAcentos(t)) || (t.charAt(0).toUpperCase() + t.slice(1));
+
+  const iguales = purchaseItems.filter(x => x.id !== it.id && categoriaDe(x) !== nueva &&
+    sinAcentos(x.canonicalProductName || x.rawDescription) === sinAcentos(nombre));
+  let aplicar = [it];
+  if (iguales.length && confirm(`¿Poner «${nueva}» también a los otros ${iguales.length} productos llamados «${nombre}»?\n\nAceptar = a todos. Cancelar = solo a este.`)) {
+    aplicar = [it, ...iguales];
+  }
+  try {
+    await guardarCategorias(aplicar, nueva);
+  } catch (err) {
+    console.error("Error guardando categoría:", err);
+    alert("No se pudo guardar la categoría.\n\nDetalle: " + (err && err.message ? err.message : err));
+  }
+};
+
+const esquemaCategorias = Schema.object({
+  properties: {
+    productos: Schema.array({
+      items: Schema.object({
+        properties: {
+          numero: Schema.number({ description: "Número del producto en la lista recibida" }),
+          categoria: Schema.string({ description: "Una de las categorías permitidas, escrita exactamente igual" })
+        }
+      })
+    })
+  }
+});
+const modelosCategorias = {};
+function getModeloCategorias(nombre) {
+  if (!modelosCategorias[nombre]) {
+    const ai = getAI(app, { backend: new GoogleAIBackend() });
+    modelosCategorias[nombre] = getGenerativeModel(ai, {
+      model: nombre,
+      generationConfig: { responseMimeType: "application/json", responseSchema: esquemaCategorias }
+    });
+  }
+  return modelosCategorias[nombre];
+}
+
+// Le pide a la IA una categoría para cada nombre. Devuelve { numero: categoria }
+async function pedirCategoriasIA(nombres) {
+  const prompt = `Asigná una categoría a cada producto de un supermercado o almacén de Argentina.
+Categorías permitidas (usá exactamente estas, sin inventar otras): ${CATEGORIAS.join(", ")}.
+Si no podés saber qué es el producto, usá "Sin detalle".
+Devolvé en "productos" un elemento por cada producto, con su "numero" y su "categoria".
+
+Productos:
+${nombres.map((n, k) => `${k + 1}. ${n}`).join("\n")}`;
+  let ultimoError = null;
+  for (const nombreModelo of MODELOS_TICKET) {
+    try {
+      const r = await Promise.race([
+        getModeloCategorias(nombreModelo).generateContent(prompt),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("La IA tardó demasiado (más de 45 segundos)")), 45000))
+      ]);
+      const json = JSON.parse(r.response.text());
+      const mapa = {};
+      (json.productos || []).forEach(p => { mapa[Math.round(num(p.numero))] = normalizarCategoria(p.categoria); });
+      return mapa;
+    } catch (e) {
+      ultimoError = e;
+      if (!esErrorTemporal(e)) throw e;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  throw new Error("La IA está saturada en este momento. Probá de nuevo en unos minutos. (" + (ultimoError && ultimoError.message ? ultimoError.message : ultimoError) + ")");
+}
+
+// Completa con IA la categoría de los productos que todavía no tienen
+window.categorizarPendientes = async () => {
+  if (!currentUser) { alert("Primero iniciá sesión."); return; }
+  const pend = purchaseItems.filter(i => !(i.category && String(i.category).trim()));
+  if (!pend.length) { alert("Todos los productos ya tienen categoría. 👍"); return; }
+  const nombreDe = (i) => (i.canonicalProductName || i.rawDescription || "").trim();
+  const unicos = [...new Set(pend.map(nombreDe).filter(Boolean))];
+  const lote = unicos.slice(0, 150);
+  const aviso = unicos.length > lote.length ? `\nSe hacen primero ${lote.length} nombres; después volvés a tocar el botón para el resto.` : "";
+  if (!confirm(`Hay ${pend.length} productos sin categoría (${unicos.length} nombres distintos).${aviso}\n\nLa IA les asigna una categoría y después podés corregir cualquiera a mano.\n\n¿Seguir?`)) return;
+  setEstadoHerramientas("Categorizando con IA…");
+  try {
+    const mapa = await pedirCategoriasIA(lote);
+    const porCategoria = {};
+    pend.forEach(i => {
+      const k = lote.indexOf(nombreDe(i)) + 1;
+      if (k > 0 && mapa[k]) (porCategoria[mapa[k]] = porCategoria[mapa[k]] || []).push(i);
+    });
+    let hechos = 0;
+    for (const [cat, items] of Object.entries(porCategoria)) { await guardarCategorias(items, cat); hechos += items.length; }
+    alert(`Listo: ${hechos} productos categorizados.`);
+  } catch (err) {
+    console.error("Error categorizando:", err);
+    alert("No se pudo categorizar.\n\nDetalle: " + (err && err.message ? err.message : err));
+  } finally {
+    setEstadoHerramientas("");
+  }
+};
+
+// -------------------------------------------------------------
+// IMPORTAR TICKETS DESDE UNA PLANILLA (CSV)
+// -------------------------------------------------------------
+function parseCsv(texto) {
+  texto = texto.replace(/^\uFEFF/, "");
+  const primera = texto.split(/\r?\n/)[0] || "";
+  const sep = (primera.match(/;/g) || []).length >= (primera.match(/,/g) || []).length ? ";" : ",";
+  const filas = [];
+  let fila = [], campo = "", comillas = false;
+  const cerrarFila = () => { fila.push(campo); campo = ""; if (fila.some(x => x.trim() !== "")) filas.push(fila); fila = []; };
+  for (let k = 0; k < texto.length; k++) {
+    const c = texto[k];
+    if (comillas) {
+      if (c === '"') { if (texto[k + 1] === '"') { campo += '"'; k++; } else comillas = false; }
+      else campo += c;
+    } else if (c === '"') comillas = true;
+    else if (c === sep) { fila.push(campo); campo = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && texto[k + 1] === "\n") k++; cerrarFila(); }
+    else campo += c;
+  }
+  if (campo !== "" || fila.length) cerrarFila();
+  if (!filas.length) return [];
+  const cab = filas.shift().map(h => h.trim());
+  return filas.map(f => Object.fromEntries(cab.map((h, k) => [h, (f[k] ?? "").trim()])));
+}
+
+const MEDIOS_PLANILLA = {
+  "efectivo": "efectivo", "transferencia": "transferencia", "transferencia bancaria": "transferencia",
+  "mercado pago (qr)": "qr_mercadopago", "efectivo / transferencia": "efectivo/transferencia"
+};
+const nPl = (v) => { const t = String(v ?? "").trim(); const n = Number(t.includes(".") ? t : t.replace(",", ".")); return t !== "" && Number.isFinite(n) ? n : 0; };
+function fechaPlanilla(txt) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(txt).trim());
+  if (!m) return null;
+  const d = new Date(+m[3], +m[2] - 1, +m[1], 12, 0);
+  return isNaN(d.getTime()) ? null : Timestamp.fromDate(d);
+}
+
+// Convierte las filas del CSV (una por producto) en tickets, pasando por el mismo control matemático que la IA
+function armarTicketsDePlanilla(filas) {
+  const grupos = new Map();
+  filas.forEach(r => { if (!r.ticket_n) return; if (!grupos.has(r.ticket_n)) grupos.set(r.ticket_n, []); grupos.get(r.ticket_n).push(r); });
+  const tickets = [];
+  [...grupos.entries()].sort((a, b) => Number(a[0]) - Number(b[0])).forEach(([n, rs]) => {
+    const h = rs[0];
+    const items = rs.map(r => {
+      const cantidad = nPl(r.cantidad) || 1;
+      const descuento = Math.abs(nPl(r.descuento_linea));
+      const unidad = sinAcentos(r.unidad);
+      return {
+        rawDescription: r.producto_original || r.producto_nombre,
+        canonicalProductName: r.producto_nombre || r.producto_original,
+        brand: r.marca || "",
+        category: normalizarCategoria(r.categoria),
+        quantity: cantidad,
+        unitPrice: nPl(r.precio_unitario),
+        discount: descuento,
+        lineTotal: r.importe_linea !== "" ? nPl(r.importe_linea) : cantidad * nPl(r.precio_unitario) - descuento,
+        presentationValue: nPl(r.contenido_por_unidad) > 0 ? nPl(r.contenido_por_unidad) : 1,
+        presentationUnit: ["kg", "l", "unidad"].includes(unidad) ? unidad : "unidad",
+        unitPriceNormalized: 0,
+        isDoubtful: false
+      };
+    });
+    const fecha = fechaPlanilla(h.fecha);
+    const notas = fecha ? [] : ["No se pudo leer la fecha del ticket en la planilla"];
+    const t = reconciliarTicket({
+      numero: n,
+      storeName: h.comercio || "Comercio",
+      receiptNumber: h.numero_comprobante || "",
+      date: fecha,
+      totalPaid: nPl(h.total_pagado_ticket),
+      subtotal: nPl(h.subtotal_ticket),
+      discountsTotal: Math.abs(nPl(h.descuentos_globales_ticket)),
+      cashbackAmount: nPl(h.reintegro_ticket),
+      paymentMethod: MEDIOS_PLANILLA[sinAcentos(h.medio_pago)] || h.medio_pago || "efectivo/transferencia",
+      items: items,
+      doubtfulNotes: notas
+    });
+    tickets.push(t);
+  });
+  return tickets;
+}
+
+// ¿Ya existe en la app un comprobante igual? (mismo comercio y mismo número, o mismo total el mismo día)
+function comprobanteExistente(t) {
+  const limpio = (x) => sinAcentos(x).replace(/[^a-z0-9]/g, "");
+  const parecido = (a, b) => { a = limpio(a); b = limpio(b); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
+  const dia = (f) => { const d = aFecha(f); return d ? d.toLocaleDateString("es-AR") : ""; };
+  return purchases.find(p => {
+    if (!parecido(p.storeName, t.storeName)) return false;
+    const mismoNumero = limpio(t.receiptNumber) && limpio(p.receiptNumber) === limpio(t.receiptNumber);
+    const mismoTotal = Math.abs((p.totalPaid || 0) - t.totalPaid) < 0.01 && dia(p.date) === dia(t.date);
+    return mismoNumero || mismoTotal;
+  });
+}
+
+async function guardarTicketImportado(t) {
+  const isPersonal = activeSpace === "personal";
+  const hId = isPersonal ? "personal" : currentHousehold.id;
+  const memberUids = isPersonal ? [currentUser.uid] : (currentHousehold ? currentHousehold.memberUids : [currentUser.uid]);
+  const dudoso = t.doubtfulNotes.length > 0;
+  const purchaseRef = doc(collection(db, "purchases"));
+  const batch = writeBatch(db);
+  batch.set(purchaseRef, {
+    householdId: hId,
+    storeName: t.storeName,
+    receiptNumber: t.receiptNumber || "",
+    date: t.date || serverTimestamp(),
+    subtotal: t.subtotal || t.totalPaid,
+    discountsTotal: t.discountsTotal || 0,
+    totalPaid: t.totalPaid,
+    cashbackAmount: t.cashbackAmount || 0,
+    effectiveCost: t.totalPaid - (t.cashbackAmount || 0),
+    paymentMethod: t.paymentMethod,
+    status: dudoso ? "a_revisar" : "confirmado",
+    reviewNotes: dudoso ? t.doubtfulNotes : [],
+    manualArchiveNumber: String(t.numero),
+    createdByUid: currentUser.uid,
+    lastModifiedByUid: currentUser.uid,
+    memberUids: memberUids,
+    createdAt: serverTimestamp()
+  });
+  t.items.forEach(item => {
+    batch.set(doc(collection(db, "purchase_items")), {
+      purchaseId: purchaseRef.id,
+      householdId: hId,
+      rawDescription: item.rawDescription,
+      canonicalProductName: item.canonicalProductName,
+      category: item.category,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      lineTotal: item.lineTotal,
+      presentationValue: item.presentationValue,
+      presentationUnit: item.presentationUnit,
+      unitPriceNormalized: item.unitPriceNormalized || item.unitPrice,
+      brand: item.brand || "",
+      discount: item.discount || 0,
+      isDoubtful: false,
+      memberUids: memberUids,
+      createdAt: serverTimestamp()
+    });
+  });
+  await batch.commit();
+}
+
+window.importarPlanilla = () => {
+  if (!currentUser) { alert("Primero iniciá sesión."); return; }
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".csv,text/csv";
+  input.onchange = async () => {
+    const archivo = input.files && input.files[0];
+    if (!archivo) return;
+    try {
+      const filas = parseCsv(await archivo.text());
+      const requeridas = ["ticket_n", "fecha", "comercio", "total_pagado_ticket", "producto_nombre", "importe_linea"];
+      const faltan = requeridas.filter(c => !(filas[0] && c in filas[0]));
+      if (!filas.length || faltan.length) {
+        alert("Ese archivo no es la planilla esperada." + (faltan.length ? "\nFaltan las columnas: " + faltan.join(", ") : ""));
+        return;
+      }
+      const tickets = armarTicketsDePlanilla(filas);
+      const nuevos = [], repetidos = [];
+      tickets.forEach(t => (comprobanteExistente(t) ? repetidos : nuevos).push(t));
+      const dudosos = nuevos.filter(t => t.doubtfulNotes.length > 0);
+      const donde = activeSpace === "personal" ? "tu espacio personal" : `«${currentHousehold ? currentHousehold.name : "hogar"}»`;
+      const productos = nuevos.reduce((a, t) => a + t.items.length, 0);
+      const resumen = (t) => `#${t.numero} ${t.storeName} $${t.totalPaid.toLocaleString("es-AR", { minimumFractionDigits: 2 })}`;
+
+      if (!nuevos.length) {
+        alert(`Los ${tickets.length} tickets de la planilla ya estaban cargados. No se agregó nada.`);
+        return;
+      }
+      let msg = `La planilla tiene ${tickets.length} tickets.\n\n• Se van a cargar ${nuevos.length} tickets (${productos} productos) en ${donde}.`;
+      if (repetidos.length) msg += `\n• Se saltean ${repetidos.length} porque ya estaban cargados: ${repetidos.map(resumen).join("; ")}.`;
+      if (dudosos.length) msg += `\n• ${dudosos.length} van a quedar en "Revisión" porque la cuenta no cierra: ${dudosos.map(t => "#" + t.numero).join(", ")}.`;
+      msg += `\n\n¿Cargar?`;
+      if (!confirm(msg)) return;
+
+      let hechos = 0;
+      for (const t of nuevos) {            // de a uno y en orden, para que queden numerados como en la planilla
+        setEstadoHerramientas(`Cargando ticket ${hechos + 1} de ${nuevos.length}…`);
+        await guardarTicketImportado(t);
+        hechos++;
+      }
+      alert(`Listo: se cargaron ${hechos} tickets (${productos} productos).`);
+    } catch (err) {
+      console.error("Error importando planilla:", err);
+      alert("No se pudo importar la planilla.\n\nDetalle: " + (err && err.message ? err.message : err));
+    } finally {
+      setEstadoHerramientas("");
+    }
+  };
+  input.click();
+};
+
+// -------------------------------------------------------------
+// BOTÓN FLOTANTE "HERRAMIENTAS" (abajo a la derecha)
+// -------------------------------------------------------------
+let estadoHerramientasEl = null;
+function setEstadoHerramientas(txt) { if (estadoHerramientasEl) estadoHerramientasEl.textContent = txt; }
+(function crearHerramientas() {
+  const btn = document.createElement("button");
+  btn.textContent = "🛠";
+  btn.title = "Herramientas";
+  btn.style.cssText = "position:fixed;bottom:16px;right:16px;width:44px;height:44px;border-radius:50%;border:1px solid #cbd5e1;background:#fff;color:#1b2430;font-size:20px;cursor:pointer;z-index:9998;box-shadow:0 2px 8px rgba(0,0,0,.25);display:none;";
+  const panel = document.createElement("div");
+  panel.style.cssText = "position:fixed;bottom:68px;right:16px;width:250px;background:#fff;color:#1b2430;border:1px solid #cbd5e1;border-radius:12px;padding:12px;z-index:9998;box-shadow:0 4px 16px rgba(0,0,0,.25);display:none;font-size:14px;";
+  panel.innerHTML = `
+    <div style="font-weight:700;margin-bottom:8px;">Herramientas</div>
+    <button id="herrImportar" style="width:100%;padding:8px;margin-bottom:6px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;color:#1b2430;cursor:pointer;">📥 Importar planilla (CSV)</button>
+    <button id="herrCategorias" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;color:#1b2430;cursor:pointer;">🏷 Categorizar productos sin categoría</button>
+    <div id="herrEstado" style="margin-top:8px;font-size:12px;color:#64748b;min-height:14px;"></div>`;
+  document.body.appendChild(btn);
+  document.body.appendChild(panel);
+  estadoHerramientasEl = panel.querySelector("#herrEstado");
+  btn.onclick = () => { panel.style.display = panel.style.display === "none" ? "block" : "none"; };
+  panel.querySelector("#herrImportar").onclick = () => { panel.style.display = "none"; window.importarPlanilla(); };
+  panel.querySelector("#herrCategorias").onclick = () => { panel.style.display = "none"; window.categorizarPendientes(); };
+  setInterval(() => {
+    btn.style.display = currentUser ? "block" : "none";
+    if (!currentUser) panel.style.display = "none";
+  }, 1000);
+})();
+
+// -------------------------------------------------------------
 // PESTAÑAS
 // -------------------------------------------------------------
 document.querySelectorAll(".nav-tab-btn").forEach(btn => {
@@ -1027,6 +1383,7 @@ document.getElementById("btnSaveManualExpense").addEventListener("click", async 
     presentationValue: 1,
     presentationUnit: "unidad",
     unitPriceNormalized: amount,
+    category: CATEGORIAS.find(c => sinAcentos(c) === sinAcentos(category)) || category || "Sin detalle",
     memberUids: memberUids,
     createdAt: serverTimestamp()
   };
@@ -1119,6 +1476,7 @@ const lineItemSchema = Schema.object({
     lineTotal: Schema.number({ description: "Importe final de la línea = quantity x unitPrice - discount" }),
     presentationValue: Schema.number({ description: "Contenido de UNA sola unidad del producto, expresado en presentationUnit (ej: 1 para una botella de 1 litro, 0.5 para un paquete de 500 g, 1 para algo que se vende por unidad o por kg). NO multiplicar por la cantidad comprada" }),
     presentationUnit: Schema.string({ description: "Unidad de medida, siempre convertida a: 'kg', 'l' o 'unidad' (nunca 'g' ni 'ml')" }),
+    category: Schema.string({ description: "Categoría del producto. Debe ser EXACTAMENTE una de: Almacén, Bebidas, Carnes, Frutas y verduras, Golosinas y snacks, Higiene personal, Hogar, Limpieza, Lácteos y fiambres, Panificados y harinas, Sin detalle" }),
     isDoubtful: Schema.boolean({ description: "True si el texto o número está borroso, roto o fue interpretado con duda" })
   }
 });
@@ -1127,6 +1485,7 @@ const receiptSchema = Schema.object({
   properties: {
     storeName: Schema.string({ description: "Nombre comercial. Si es un chino de barrio sin nombre claro, usar 'Chino + calle' (ej: 'Chino Roffo'). Cadenas: DIA, Vea, Malambo, etc." }),
     receiptNumber: Schema.string({ description: "Número de comprobante" }),
+    receiptType: Schema.string({ description: "Tipo de comprobante tal cual figura (ej: 'Factura B', 'Factura A', 'Ticket', 'Presupuesto'). Vacío si no se lee" }),
     dateString: Schema.string({ description: "Fecha y hora en formato YYYY-MM-DD HH:mm, o vacío si no se lee" }),
     subtotal: Schema.number({ description: "Suma de los importes finales de las líneas (ya con sus descuentos de línea), antes de los descuentos globales" }),
     discountsTotal: Schema.number({ description: "Descuentos GLOBALES del ticket (cupones, promos sobre el total, descuento por medio de pago, jubilados), como número POSITIVO. NO incluir los descuentos que ya anotaste en cada línea" }),
@@ -1150,7 +1509,20 @@ Extraé rigurosamente los datos respetando estas reglas:
 8. Números argentinos: el punto separa miles y la coma separa decimales. '1.234,50' significa 1234.50 y '950,00' significa 950. Devolvé siempre números normales (sin separador de miles).
 9. Descuentos: en los tickets suelen aparecer como renglones con signo negativo o palabras como DESC, DTO, PROMO, 2x1, AHORRO, CUPON. Si el renglón corresponde claramente a un producto, restalo de ESA línea (campo discount, número positivo). Si es un descuento sobre el total, va en discountsTotal. Nunca cuentes el mismo descuento dos veces y nunca pongas descuentos como productos.
 10. Los importes de IVA, impuestos y redondeos que ya están incluidos en el total no son productos ni descuentos: ignoralos.
-11. Antes de responder verificá la cuenta: la suma de los lineTotal menos discountsTotal tiene que dar totalPaid. Si no da, releé el ticket; si la diferencia persiste, explicalo en doubtfulNotes.`;
+11. Antes de responder verificá la cuenta: la suma de los lineTotal menos discountsTotal tiene que dar totalPaid. Si no da, releé el ticket; si la diferencia persiste, explicalo en doubtfulNotes.
+12. Categoría de cada producto (campo category), escrita EXACTAMENTE igual que en esta lista:
+- Almacén: fideos, pastas rellenas, aceite, salsas y pulpa de tomate, conservas, azúcar, café, mermeladas, mayonesa, condimentos y esencias.
+- Panificados y harinas: harinas, levadura, pan, tapas de empanadas y de tarta.
+- Lácteos y fiambres: leche, quesos, crema, huevos, yogur, fiambres.
+- Carnes: carne vacuna, pollo, cerdo, hamburguesas.
+- Frutas y verduras: frutas y verduras frescas.
+- Bebidas: gaseosas, jugos, aguas, aperitivos, cervezas, vinos.
+- Golosinas y snacks: galletitas, alfajores, chocolates, caramelos, chicles, turrones, snacks.
+- Limpieza: lavandina, detergente, jabón para ropa, suavizante, esponjas, limpiadores.
+- Higiene personal: papel higiénico, shampoo, jabón de tocador, crema dental, toallitas, pañuelos descartables.
+- Hogar: bolsas, papel de cocina, utensilios, lámparas, fósforos y artículos del hogar.
+- Sin detalle: líneas genéricas como 'ALMACEN' o 'VENTAS VARIAS' o productos que no podés identificar.
+13. receiptType: el tipo de comprobante tal cual figura impreso (por ejemplo 'Factura B' o 'Ticket'). Si no se lee, dejalo vacío.`;
 
 // Si el modelo principal está saturado ("high demand"), se prueba con los siguientes
 const MODELOS_TICKET = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
@@ -1260,6 +1632,7 @@ async function leerTicketConGemini(file) {
       presentationValue: presVal,
       presentationUnit: it.presentationUnit || "unidad",
       unitPriceNormalized: 0, // se calcula al reconciliar
+      category: normalizarCategoria(it.category),
       isDoubtful: !!it.isDoubtful
     };
   });
@@ -1281,6 +1654,7 @@ async function leerTicketConGemini(file) {
   return reconciliarTicket({
     storeName: json.storeName || "Comercio",
     receiptNumber: json.receiptNumber || "",
+    receiptType: json.receiptType || "",
     date: fecha,
     totalPaid: totalPaid,
     subtotal: num(json.subtotal),
@@ -1398,6 +1772,7 @@ async function processParsedTicket(parsed) {
     householdId: hId,
     storeName: parsed.storeName,
     receiptNumber: parsed.receiptNumber || "",
+    receiptType: parsed.receiptType || "",
     date: parsed.date || serverTimestamp(),
     subtotal: parsed.subtotal || parsed.totalPaid,
     discountsTotal: parsed.discountsTotal || 0,
@@ -1430,6 +1805,7 @@ async function processParsedTicket(parsed) {
       presentationUnit: item.presentationUnit || "unidad",
       unitPriceNormalized: item.unitPriceNormalized || item.unitPrice,
       brand: item.brand || "",
+      category: item.category || "Sin detalle",
       discount: item.discount || 0,
       isDoubtful: !!item.isDoubtful,
       memberUids: memberUids,
