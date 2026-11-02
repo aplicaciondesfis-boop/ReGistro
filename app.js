@@ -19,6 +19,7 @@ import {
 
 import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken as getAppCheckToken } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app-check.js";
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
+import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs";
 
 // Configuración del proyecto aprovisionado en Firebase
 const firebaseConfig = {
@@ -58,6 +59,8 @@ let userHouseholds = [];
 let purchases = [];
 let purchaseItems = [];
 let obligations = [];
+let purchasesReady = false;
+let itemsReady = false;
 
 // Categorías oficiales de productos (las mismas que usabas en tus planillas)
 const CATEGORIAS = ["Almacén", "Bebidas", "Carnes", "Frutas y verduras", "Golosinas y snacks", "Higiene personal", "Hogar", "Limpieza", "Lácteos y fiambres", "Panificados y harinas", "Sin detalle"];
@@ -86,9 +89,77 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "lectura real v8 - 02/11 · diseño v1 - 01/11";
+versionTag.textContent = "tickets v9 · 02/11/2026";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
+
+// Una tarea a la vez; las pestañas siguen disponibles mientras la IA trabaja.
+let actividadActual = null;
+const actividadEl = document.createElement("div");
+actividadEl.className = "actividad-flotante";
+actividadEl.hidden = true;
+actividadEl.setAttribute("role", "status");
+actividadEl.setAttribute("aria-live", "polite");
+actividadEl.setAttribute("aria-atomic", "true");
+actividadEl.innerHTML = '<span class="actividad-rueda" aria-hidden="true"></span><div><strong></strong><div class="actividad-texto"></div></div>';
+document.body.appendChild(actividadEl);
+
+function datosListos() {
+  if (!currentUser) { alert("Primero iniciá sesión."); return false; }
+  if (!purchasesReady) {
+    alert("Esperá a que se carguen los tickets desde internet para poder comprobar que no estén repetidos.");
+    return false;
+  }
+  return true;
+}
+function iniciarActividad(titulo, texto) {
+  if (actividadActual) { alert("Hay una tarea en curso. Podés seguir navegando mientras termina."); return false; }
+  if (!datosListos()) return false;
+  actividadActual = { uid: currentUser.uid, espacio: activeSpace };
+  actividadEl.querySelector("strong").textContent = titulo;
+  actividadEl.querySelector(".actividad-texto").textContent = texto;
+  actividadEl.hidden = false;
+  controlesActividad(true);
+  return true;
+}
+function controlesActividad(ocupado) {
+  for (const id of ["spaceSelector", "btnAuth", "btnOpenScan", "btnOpenManual", "btnSaveManualExpense", "fileReceiptInput", "scanArchiveInput", "manualArchiveInput", "btnSampleDia", "btnSampleChino", "herrImportar", "herrCategorias"]) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = ocupado;
+  }
+}
+function verificarContextoActividad() {
+  if (!actividadActual || actividadActual.uid !== currentUser?.uid || actividadActual.espacio !== activeSpace) {
+    throw new Error("Cambió la sesión o el espacio durante la tarea. Volvé a intentarlo en el espacio correcto.");
+  }
+}
+function terminarActividad() {
+  actividadActual = null;
+  actividadEl.hidden = true;
+  controlesActividad(false);
+}
+
+function pedirNumeroManual(input) {
+  const numero = numeroManual(input.value);
+  if (!numero) {
+    alert("Ingresá el número que escribiste a mano en el ticket. Usá solo números, por ejemplo: 142.");
+    input.focus();
+  }
+  return numero;
+}
+function resumenCompra(p) {
+  return `${p.manualArchiveNumber ? "Nº manual " + p.manualArchiveNumber : "Sin número manual"} · ${p.storeName || "Comercio"} · ${fechaCorta(aFecha(p.date))} · ${moneda(p.totalPaid)}`;
+}
+function permitirTicket(ticket) {
+  const coincidencia = buscarDuplicado(ticket, purchases);
+  if (!coincidencia) return true;
+  const { compra, motivo } = coincidencia;
+  if (motivo !== "total") {
+    alert(`Ese ${motivo === "numero" ? "número manual" : "comprobante"} ya está cargado.\n\n${resumenCompra(compra)}\n\nNo se guardó otra copia.`);
+    return false;
+  }
+  return confirm(`Ya hay un ticket con exactamente el mismo total, aunque el comercio tenga otro nombre.\n\n${resumenCompra(compra)}\n\nSi es la misma compra, cancelá. ¿Confirmás que es otra compra distinta y querés guardarla?`);
+}
 
 // Registrar Service Worker para PWA
 if ('serviceWorker' in navigator) {
@@ -112,6 +183,8 @@ btnAuth.addEventListener("click", () => {
 });
 
 onAuthStateChanged(auth, async (user) => {
+  purchasesReady = false;
+  itemsReady = false;
   currentUser = user;
   if (user) {
     authScreen.style.display = "none";
@@ -174,6 +247,7 @@ function updateSpaceSelectorUI() {
 
 spaceSelector.addEventListener("change", (e) => {
   activeSpace = e.target.value;
+  if (activeSpace !== "personal") currentHousehold = userHouseholds.find(h => h.id === activeSpace) || currentHousehold;
   listenData();
 });
 
@@ -185,6 +259,10 @@ let unsubItems = null;
 let unsubObligations = null;
 
 function listenData() {
+  purchasesReady = false;
+  itemsReady = false;
+  purchases = [];
+  purchaseItems = [];
   if (unsubPurchases) unsubPurchases();
   if (unsubItems) unsubItems();
   if (unsubObligations) unsubObligations();
@@ -200,7 +278,8 @@ function listenData() {
     ? query(collection(db, "purchases"), where("householdId", "==", "personal"), where("createdByUid", "==", currentUser.uid))
     : query(collection(db, "purchases"), where("householdId", "==", targetHouseholdId), where("memberUids", "array-contains", currentUser.uid));
 
-  unsubPurchases = onSnapshot(qPurchases, (snap) => {
+  unsubPurchases = onSnapshot(qPurchases, { includeMetadataChanges: true }, (snap) => {
+    purchasesReady = !snap.metadata.fromCache;
     purchases = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     purchases.sort((a, b) => {
       const da = a.date ? (a.date.toDate ? a.date.toDate() : new Date(a.date)) : new Date();
@@ -208,6 +287,10 @@ function listenData() {
       return db - da;
     });
     renderAll();
+  }, (err) => {
+    purchasesReady = false;
+    console.error("No se pudieron cargar los tickets:", err);
+    alert("No se pudieron cargar los tickets. No se habilitarán nuevas cargas hasta poder comprobar los duplicados. Revisá tu conexión y volvé a abrir la app.");
   });
 
   // 2. Líneas de compra
@@ -215,9 +298,13 @@ function listenData() {
     ? query(collection(db, "purchase_items"), where("householdId", "==", "personal"))
     : query(collection(db, "purchase_items"), where("householdId", "==", targetHouseholdId), where("memberUids", "array-contains", currentUser.uid));
 
-  unsubItems = onSnapshot(qItems, (snap) => {
+  unsubItems = onSnapshot(qItems, { includeMetadataChanges: true }, (snap) => {
+    itemsReady = !snap.metadata.fromCache;
     purchaseItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderAll();
+  }, (err) => {
+    itemsReady = false;
+    console.error("No se pudieron cargar los productos:", err);
   });
 
   // 3. Obligaciones
@@ -274,14 +361,6 @@ function horaDe(d) {
 function categoriaDe(i) { return (i.category && String(i.category).trim()) || "Sin detalle"; }
 function costoRealDe(p) { return p.effectiveCost != null ? p.effectiveCost : (p.totalPaid || 0) - (p.cashbackAmount || 0); }
 function unidadCorta(u) { return u === "kg" ? "/kg" : (u === "l" ? "/l" : "/u"); }
-
-// Número correlativo de ticket (1 = el primero que se cargó)
-function numerarCompras() {
-  const t = (p) => (aFecha(p.createdAt) || aFecha(p.date) || new Date(0)).getTime();
-  const mapa = {};
-  [...purchases].sort((a, b) => t(a) - t(b)).forEach((p, i) => { mapa[p.id] = i + 1; });
-  return mapa;
-}
 
 // Factor por el que se multiplican los precios de un ticket para reflejar su reintegro
 // (ej: reintegro de $9.500 sobre un ticket de $50.087 => factor 0,8103, o sea 18,97% más barato)
@@ -452,13 +531,14 @@ function detalleCompra(p) {
       <div class="detalle-meta">
         <span>💳 ${esc(medioLabel(p.paymentMethod))}</span>
         ${p.receiptNumber ? `<span>🧾 ${esc(p.receiptNumber)}</span>` : ""}
-        ${p.manualArchiveNumber ? `<span>🗂 Archivo: <strong>${esc(p.manualArchiveNumber)}</strong></span>` : ""}
+        <span>🗂 Nº manual: <strong>${esc(p.manualArchiveNumber || "Sin asignar")}</strong></span>
         ${p.discountsTotal > 0 ? `<span class="verde">Ahorro: ${moneda(p.discountsTotal)}</span>` : ""}
         ${p.cashbackAmount > 0 ? `<span class="azul">Reintegro: ${moneda(p.cashbackAmount)} (${pct})</span>` : ""}
       </div>
       ${p.reviewNotes && p.reviewNotes.length ? `<div class="notas-revision">${p.reviewNotes.map(n => `<div>• ${esc(n)}</div>`).join("")}</div>` : ""}
       ${items.length ? `<div class="tabla-wrap"><table class="tabla mini"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num hide-sm">Precio</th><th class="num hide-sm">Desc.</th><th class="num">Total</th></tr></thead><tbody>${filas}</tbody></table></div>` : `<div class="vacio">Sin detalle de productos.</div>`}
       <div class="detalle-acciones">
+        <button class="btn-chico" onclick="window.editarNumeroManual('${p.id}')">✎ Número manual</button>
         <button class="btn-chico" onclick="window.editarReintegro('${p.id}')">💸 ${p.cashbackAmount > 0 ? "Editar reintegro" : "Agregar reintegro"}</button>
         ${revisar ? `<button class="btn-chico btn-ok" onclick="window.approvePurchase('${p.id}')">✓ Aprobar</button>` : ""}
         <button class="btn-chico btn-peligro" onclick="window.deletePurchase('${p.id}')">🗑 Eliminar</button>
@@ -467,8 +547,8 @@ function detalleCompra(p) {
 }
 
 // ---------- Columnas de las tablas de compras ----------
-function colsCompras(tipo, nums) {
-  const nro = { key: "n", label: "Nº", valor: r => nums[r.id] || 0, render: r => nums[r.id] || "—" };
+function colsCompras(tipo) {
+  const nro = { key: "n", label: "Nº manual", valor: r => numeroManual(r.manualArchiveNumber).padStart(32, "0"), render: r => esc(r.manualArchiveNumber || "Sin asignar") };
   const fechaHora = { key: "fecha", label: "Fecha", valor: r => (aFecha(r.date) || 0).valueOf(), render: r => { const d = aFecha(r.date); const h = horaDe(d); return fechaCorta(d) + (h !== "—" ? ` <span class="suave">· ${h}</span>` : ""); } };
   const tienda = { key: "storeName", label: "Tienda", valor: r => r.storeName || "" };
   const medio = { key: "medio", label: "Medio de pago", cls: "hide-sm", valor: r => medioLabel(r.paymentMethod), render: r => esc(medioLabel(r.paymentMethod)) };
@@ -515,7 +595,7 @@ function renderEncabezado() {
 
   const aRevisar = purchases.filter(p => p.status === "a_revisar").length;
   const pendientes = obligations.filter(o => o.status === "pendiente").length;
-  const total = aRevisar + pendientes;
+  const total = aRevisar + pendientes + gruposPorTotal(purchases).length;
   if (total > 0) {
     revisionBadge.textContent = total;
     revisionBadge.style.display = "inline-block";
@@ -552,7 +632,7 @@ function renderResumen() {
 
   document.getElementById("resumenCount").textContent = `${lista.length} registros · tocá una fila para ver el detalle`;
   document.getElementById("resumenCompras").innerHTML = tablaHtml(
-    "compras-resumen", colsCompras("resumen", numerarCompras()), lista,
+    "compras-resumen", colsCompras("resumen"), lista,
     { orden: { key: "fecha", dir: "desc" }, detalle: detalleCompra, vacio: "No hay comprobantes con estos filtros." }
   );
 }
@@ -686,13 +766,12 @@ function renderPlanilla() {
 
   const q = document.getElementById("planillaSearch").value.toLowerCase().trim();
   const coincide = (texto) => !q || texto.toLowerCase().includes(q);
-  const nums = numerarCompras();
   let filas = [];
   let html = "";
 
   if (sub === "compras") {
-    filas = comprasFiltradas(["tienda", "medio"]).filter(p => coincide(`${p.storeName} ${medioLabel(p.paymentMethod)} ${p.receiptNumber || ""} ${p.receiptType || ""} ${fechaCorta(aFecha(p.date))}`));
-    html = tablaHtml("planilla-compras", colsCompras("planilla", nums), filas,
+    filas = comprasFiltradas(["tienda", "medio"]).filter(p => coincide(`${p.manualArchiveNumber || ""} ${p.storeName} ${medioLabel(p.paymentMethod)} ${p.receiptNumber || ""} ${p.receiptType || ""} ${fechaCorta(aFecha(p.date))}`));
+    html = tablaHtml("planilla-compras", colsCompras("planilla"), filas,
       { orden: { key: "fecha", dir: "desc" }, detalle: detalleCompra, vacio: "No hay comprobantes con estos filtros." });
   } else if (sub === "items") {
     const compraDe = {};
@@ -772,7 +851,20 @@ function renderRevision() {
   purchases.forEach(p => { compraDe[p.id] = p; });
   const dudosos = purchaseItems.filter(i => i.isDoubtful && compraDe[i.purchaseId]);
 
-  let html = `<div class="section-title"><span>Comprobantes a revisar</span><span class="muted">${aRevisar.length}</span></div>
+  const grupos = gruposPorTotal(purchases);
+  let html = `<div class="section-title"><span>Tickets con el mismo total</span><span class="muted">${grupos.length} ${grupos.length === 1 ? "grupo" : "grupos"}</span></div>
+    <div class="aviso aviso-warn">Revisá estos grupos para encontrar compras cargadas más de una vez. Se comparan los totales aunque cambie el nombre del comercio. No se elimina nada automáticamente.</div>`;
+  html += grupos.length ? grupos.map((grupo, indice) => {
+    const cols = [
+      { key: "manual", label: "Nº manual", valor: p => p.manualArchiveNumber || "", render: p => esc(p.manualArchiveNumber || "Sin asignar") },
+      { key: "storeName", label: "Comercio", valor: p => p.storeName || "" },
+      { key: "fecha", label: "Fecha", valor: p => (aFecha(p.date) || 0).valueOf(), render: p => fechaCorta(aFecha(p.date)) + " · " + horaDe(aFecha(p.date)) },
+      { key: "items", label: "Productos", num: true, valor: p => purchaseItems.filter(i => i.purchaseId === p.id).length, render: p => itemsReady ? purchaseItems.filter(i => i.purchaseId === p.id).length : "Cargando…" },
+      { key: "cashbackAmount", label: "Reintegro", num: true, valor: p => p.cashbackAmount || 0, render: p => moneda(p.cashbackAmount) }
+    ];
+    return `<h3>${moneda(grupo[0].totalPaid)} · ${grupo.length} registros</h3>` + tablaHtml(`duplicados-${indice}`, cols, grupo, { detalle: detalleCompra });
+  }).join("") : `<div class="vacio">No hay tickets con el mismo total en este espacio.</div>`;
+  html += `<div class="section-title"><span>Comprobantes a revisar</span><span class="muted">${aRevisar.length}</span></div>
     <div class="aviso aviso-warn">⚠️ Tickets donde la suma de las líneas no coincide con el total pagado, con datos dudosos o con comercios no reconocidos.</div>`;
 
   html += aRevisar.length ? `<div class="items-list">` + aRevisar.map(p => `
@@ -935,6 +1027,8 @@ window.editarReintegro = async (id) => {
 };
 
 window.deletePurchase = async (id) => {
+  if (actividadActual || !datosListos()) return;
+  if (!itemsReady) { alert("Esperá a que se carguen todos los productos antes de eliminar un ticket."); return; }
   const p = purchases.find(x => x.id === id);
   const detalle = p ? ` de ${p.storeName || "comercio"} por $${(p.totalPaid || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "";
   if (!confirm(`¿Eliminar el comprobante${detalle}?\n\nSe borra también el detalle de sus productos. No se puede deshacer.`)) return;
@@ -1051,6 +1145,7 @@ ${nombres.map((n, k) => `${k + 1}. ${n}`).join("\n")}`;
 
 // Completa con IA la categoría de los productos que todavía no tienen
 window.categorizarPendientes = async () => {
+  if (actividadActual) { alert("Esperá a que termine la tarea actual."); return; }
   if (!currentUser) { alert("Primero iniciá sesión."); return; }
   const pend = purchaseItems.filter(i => !(i.category && String(i.category).trim()));
   if (!pend.length) { alert("Todos los productos ya tienen categoría. 👍"); return; }
@@ -1059,7 +1154,8 @@ window.categorizarPendientes = async () => {
   const lote = unicos.slice(0, 150);
   const aviso = unicos.length > lote.length ? `\nSe hacen primero ${lote.length} nombres; después volvés a tocar el botón para el resto.` : "";
   if (!confirm(`Hay ${pend.length} productos sin categoría (${unicos.length} nombres distintos).${aviso}\n\nLa IA les asigna una categoría y después podés corregir cualquiera a mano.\n\n¿Seguir?`)) return;
-  setEstadoHerramientas("Categorizando con IA…");
+  if (!iniciarActividad("IA trabajando", "Asignando categorías a los productos…")) return;
+  setEstadoHerramientas("Asignando categorías a los productos…");
   try {
     const mapa = await pedirCategoriasIA(lote);
     const porCategoria = {};
@@ -1068,13 +1164,18 @@ window.categorizarPendientes = async () => {
       if (k > 0 && mapa[k]) (porCategoria[mapa[k]] = porCategoria[mapa[k]] || []).push(i);
     });
     let hechos = 0;
-    for (const [cat, items] of Object.entries(porCategoria)) { await guardarCategorias(items, cat); hechos += items.length; }
+    for (const [cat, items] of Object.entries(porCategoria)) {
+      verificarContextoActividad();
+      setEstadoHerramientas(`Guardando categorías: ${hechos} de ${pend.length} productos…`);
+      await guardarCategorias(items, cat); hechos += items.length;
+    }
     alert(`Listo: ${hechos} productos categorizados.`);
   } catch (err) {
     console.error("Error categorizando:", err);
     alert("No se pudo categorizar.\n\nDetalle: " + (err && err.message ? err.message : err));
   } finally {
     setEstadoHerramientas("");
+    terminarActividad();
   }
 };
 
@@ -1119,9 +1220,16 @@ function fechaPlanilla(txt) {
 // Convierte las filas del CSV (una por producto) en tickets, pasando por el mismo control matemático que la IA
 function armarTicketsDePlanilla(filas) {
   const grupos = new Map();
-  filas.forEach(r => { if (!r.ticket_n) return; if (!grupos.has(r.ticket_n)) grupos.set(r.ticket_n, []); grupos.get(r.ticket_n).push(r); });
+  filas.forEach((r, indice) => {
+    if (!r.ticket_n) throw new Error(`La fila ${indice + 2} no tiene número manual en ticket_n. Completalo antes de importar.`);
+    if (!grupos.has(r.ticket_n)) grupos.set(r.ticket_n, []);
+    grupos.get(r.ticket_n).push(r);
+  });
   const tickets = [];
   [...grupos.entries()].sort((a, b) => Number(a[0]) - Number(b[0])).forEach(([n, rs]) => {
+    const numero = numeroManual(n);
+    if (!numero) throw new Error(`El ticket «${n}» no tiene un número manual válido. Usá solo números en ticket_n.`);
+    if (tickets.some(t => t.numero === numero)) throw new Error(`El número manual ${numero} aparece escrito de dos maneras en la planilla. Revisalo antes de importar.`);
     const h = rs[0];
     const items = rs.map(r => {
       const cantidad = nPl(r.cantidad) || 1;
@@ -1145,7 +1253,7 @@ function armarTicketsDePlanilla(filas) {
     const fecha = fechaPlanilla(h.fecha);
     const notas = fecha ? [] : ["No se pudo leer la fecha del ticket en la planilla"];
     const t = reconciliarTicket({
-      numero: n,
+      numero,
       storeName: h.comercio || "Comercio",
       receiptNumber: h.numero_comprobante || "",
       date: fecha,
@@ -1162,20 +1270,8 @@ function armarTicketsDePlanilla(filas) {
   return tickets;
 }
 
-// ¿Ya existe en la app un comprobante igual? (mismo comercio y mismo número, o mismo total el mismo día)
-function comprobanteExistente(t) {
-  const limpio = (x) => sinAcentos(x).replace(/[^a-z0-9]/g, "");
-  const parecido = (a, b) => { a = limpio(a); b = limpio(b); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
-  const dia = (f) => { const d = aFecha(f); return d ? d.toLocaleDateString("es-AR") : ""; };
-  return purchases.find(p => {
-    if (!parecido(p.storeName, t.storeName)) return false;
-    const mismoNumero = limpio(t.receiptNumber) && limpio(p.receiptNumber) === limpio(t.receiptNumber);
-    const mismoTotal = Math.abs((p.totalPaid || 0) - t.totalPaid) < 0.01 && dia(p.date) === dia(t.date);
-    return mismoNumero || mismoTotal;
-  });
-}
-
 async function guardarTicketImportado(t) {
+  verificarContextoActividad();
   const isPersonal = activeSpace === "personal";
   const hId = isPersonal ? "personal" : currentHousehold.id;
   const memberUids = isPersonal ? [currentUser.uid] : (currentHousehold ? currentHousehold.memberUids : [currentUser.uid]);
@@ -1225,13 +1321,14 @@ async function guardarTicketImportado(t) {
 }
 
 window.importarPlanilla = () => {
-  if (!currentUser) { alert("Primero iniciá sesión."); return; }
+  if (!datosListos() || actividadActual) return;
   const input = document.createElement("input");
   input.type = "file";
   input.accept = ".csv,text/csv";
   input.onchange = async () => {
     const archivo = input.files && input.files[0];
     if (!archivo) return;
+    if (!iniciarActividad("Importando planilla", "Comprobando números manuales y tickets repetidos…")) return;
     try {
       const filas = parseCsv(await archivo.text());
       const requeridas = ["ticket_n", "fecha", "comercio", "total_pagado_ticket", "producto_nombre", "importe_linea"];
@@ -1242,34 +1339,41 @@ window.importarPlanilla = () => {
       }
       const tickets = armarTicketsDePlanilla(filas);
       const nuevos = [], repetidos = [];
-      tickets.forEach(t => (comprobanteExistente(t) ? repetidos : nuevos).push(t));
+      for (const t of tickets) {
+        // Incluye los tickets anteriores del mismo archivo, aunque tengan otro ID.
+        const coincidencia = buscarDuplicado(t, [...purchases, ...nuevos]);
+        (coincidencia ? repetidos : nuevos).push(t);
+      }
       const dudosos = nuevos.filter(t => t.doubtfulNotes.length > 0);
       const donde = activeSpace === "personal" ? "tu espacio personal" : `«${currentHousehold ? currentHousehold.name : "hogar"}»`;
       const productos = nuevos.reduce((a, t) => a + t.items.length, 0);
       const resumen = (t) => `#${t.numero} ${t.storeName} $${t.totalPaid.toLocaleString("es-AR", { minimumFractionDigits: 2 })}`;
 
       if (!nuevos.length) {
-        alert(`Los ${tickets.length} tickets de la planilla ya estaban cargados. No se agregó nada.`);
+        alert(`Los ${tickets.length} tickets de la planilla coinciden por número manual, comprobante o total con tickets ya cargados o del mismo archivo. No se agregó nada.`);
         return;
       }
       let msg = `La planilla tiene ${tickets.length} tickets.\n\n• Se van a cargar ${nuevos.length} tickets (${productos} productos) en ${donde}.`;
-      if (repetidos.length) msg += `\n• Se saltean ${repetidos.length} porque ya estaban cargados: ${repetidos.map(resumen).join("; ")}.`;
+      if (repetidos.length) msg += `\n• Se saltean ${repetidos.length} por coincidencia de número manual, comprobante o total (incluso con otro nombre de comercio): ${repetidos.map(resumen).join("; ")}.`;
       if (dudosos.length) msg += `\n• ${dudosos.length} van a quedar en "Revisión" porque la cuenta no cierra: ${dudosos.map(t => "#" + t.numero).join(", ")}.`;
       msg += `\n\n¿Cargar?`;
       if (!confirm(msg)) return;
 
       let hechos = 0;
-      for (const t of nuevos) {            // de a uno y en orden, para que queden numerados como en la planilla
+      for (const t of nuevos) {
+        // Repite el control por si se recibieron cambios desde otro dispositivo.
+        if (buscarDuplicado(t, purchases)) continue;
         setEstadoHerramientas(`Cargando ticket ${hechos + 1} de ${nuevos.length}…`);
         await guardarTicketImportado(t);
         hechos++;
       }
-      alert(`Listo: se cargaron ${hechos} tickets (${productos} productos).`);
+      alert(`Listo: se cargaron ${hechos} tickets.${hechos < nuevos.length ? " Se omitieron coincidencias recibidas durante la importación." : ""}`);
     } catch (err) {
       console.error("Error importando planilla:", err);
       alert("No se pudo importar la planilla.\n\nDetalle: " + (err && err.message ? err.message : err));
     } finally {
       setEstadoHerramientas("");
+      terminarActividad();
     }
   };
   input.click();
@@ -1279,7 +1383,10 @@ window.importarPlanilla = () => {
 // BOTÓN FLOTANTE "HERRAMIENTAS" (abajo a la derecha)
 // -------------------------------------------------------------
 let estadoHerramientasEl = null;
-function setEstadoHerramientas(txt) { if (estadoHerramientasEl) estadoHerramientasEl.textContent = txt; }
+function setEstadoHerramientas(txt) {
+  if (estadoHerramientasEl) estadoHerramientasEl.textContent = txt;
+  if (actividadActual && txt) actividadEl.querySelector(".actividad-texto").textContent = txt;
+}
 (function crearHerramientas() {
   const btn = document.createElement("button");
   btn.textContent = "🛠";
@@ -1335,68 +1442,103 @@ document.getElementById("btnCloseSettingsModal").addEventListener("click", () =>
 
 // Guardar gasto manual
 document.getElementById("btnSaveManualExpense").addEventListener("click", async () => {
+  if (actividadActual || !datosListos()) return;
   const store = document.getElementById("manualStoreSelect").value;
   const amount = parseFloat(document.getElementById("manualAmountInput").value);
   const category = document.getElementById("manualCategorySelect").value;
   const description = document.getElementById("manualDescriptionInput").value;
   const paymentMethod = document.getElementById("manualPaymentMethodSelect").value;
-  const manualArchiveNumber = document.getElementById("manualArchiveInput").value;
+  const manualArchiveNumber = pedirNumeroManual(document.getElementById("manualArchiveInput"));
+  if (!manualArchiveNumber) return;
 
   if (isNaN(amount) || amount <= 0) {
     alert("Por favor ingresá un monto válido.");
     return;
   }
+  if (!permitirTicket({ manualArchiveNumber, storeName: store, totalPaid: amount })) return;
+  if (!iniciarActividad("Guardando ticket", `Número manual ${manualArchiveNumber}…`)) return;
+  try {
+    verificarContextoActividad();
 
-  const isPersonal = activeSpace === "personal";
-  const hId = isPersonal ? "personal" : currentHousehold.id;
-  const memberUids = isPersonal ? [currentUser.uid] : (currentHousehold ? currentHousehold.memberUids : [currentUser.uid]);
+    const isPersonal = activeSpace === "personal";
+    const hId = isPersonal ? "personal" : currentHousehold.id;
+    const memberUids = isPersonal ? [currentUser.uid] : (currentHousehold ? currentHousehold.memberUids : [currentUser.uid]);
 
-  const purchaseRef = doc(collection(db, "purchases"));
-  const purchase = {
-    householdId: hId,
-    storeName: store,
-    receiptType: "Gasto Manual",
-    date: serverTimestamp(),
-    subtotal: amount,
-    discountsTotal: 0,
-    totalPaid: amount,
-    cashbackAmount: 0,
-    effectiveCost: amount,
-    paymentMethod: paymentMethod,
-    status: "confirmado",
-    manualArchiveNumber: manualArchiveNumber,
-    createdByUid: currentUser.uid,
-    lastModifiedByUid: currentUser.uid,
-    memberUids: memberUids,
-    createdAt: serverTimestamp()
-  };
+    const purchaseRef = doc(collection(db, "purchases"));
+    const purchase = {
+      householdId: hId,
+      storeName: store,
+      receiptType: "Gasto Manual",
+      date: serverTimestamp(),
+      subtotal: amount,
+      discountsTotal: 0,
+      totalPaid: amount,
+      cashbackAmount: 0,
+      effectiveCost: amount,
+      paymentMethod: paymentMethod,
+      status: "confirmado",
+      manualArchiveNumber: manualArchiveNumber,
+      createdByUid: currentUser.uid,
+      lastModifiedByUid: currentUser.uid,
+      memberUids: memberUids,
+      createdAt: serverTimestamp()
+    };
 
-  const itemRef = doc(collection(db, "purchase_items"));
-  const item = {
-    purchaseId: purchaseRef.id,
-    householdId: hId,
-    rawDescription: description || category,
-    canonicalProductName: description || category,
-    quantity: 1,
-    unitPrice: amount,
-    lineTotal: amount,
-    presentationValue: 1,
-    presentationUnit: "unidad",
-    unitPriceNormalized: amount,
-    category: CATEGORIAS.find(c => sinAcentos(c) === sinAcentos(category)) || category || "Sin detalle",
-    memberUids: memberUids,
-    createdAt: serverTimestamp()
-  };
+    const itemRef = doc(collection(db, "purchase_items"));
+    const item = {
+      purchaseId: purchaseRef.id,
+      householdId: hId,
+      rawDescription: description || category,
+      canonicalProductName: description || category,
+      quantity: 1,
+      unitPrice: amount,
+      lineTotal: amount,
+      presentationValue: 1,
+      presentationUnit: "unidad",
+      unitPriceNormalized: amount,
+      category: CATEGORIAS.find(c => sinAcentos(c) === sinAcentos(category)) || category || "Sin detalle",
+      memberUids: memberUids,
+      createdAt: serverTimestamp()
+    };
 
-  const batch = writeBatch(db);
-  batch.set(purchaseRef, purchase);
-  batch.set(itemRef, item);
-  await batch.commit();
+    const batch = writeBatch(db);
+    batch.set(purchaseRef, purchase);
+    batch.set(itemRef, item);
+    await batch.commit();
 
-  modalManual.style.display = "none";
-  document.getElementById("manualAmountInput").value = "";
-  document.getElementById("manualDescriptionInput").value = "";
+    modalManual.style.display = "none";
+    document.getElementById("manualAmountInput").value = "";
+    document.getElementById("manualDescriptionInput").value = "";
+    document.getElementById("manualArchiveInput").value = "";
+  } catch (err) {
+    console.error("Error guardando gasto:", err);
+    alert("No se pudo guardar el gasto.\n\nDetalle: " + err.message);
+  } finally {
+    terminarActividad();
+  }
 });
+
+// Completar el número de tickets antiguos sin inventar uno por orden de carga.
+window.editarNumeroManual = async (id) => {
+  if (actividadActual || !datosListos()) return;
+  const compra = purchases.find(p => p.id === id);
+  if (!compra) return;
+  const respuesta = prompt("Número escrito a mano en este ticket:", compra.manualArchiveNumber || "");
+  if (respuesta === null) return;
+  const numero = numeroManual(respuesta);
+  if (!numero) { alert("Ingresá solo el número manual del ticket, por ejemplo: 142."); return; }
+  const repetido = buscarDuplicado({ manualArchiveNumber: numero }, purchases, id);
+  if (repetido) { alert("Ese número ya pertenece a otro ticket:\n\n" + resumenCompra(repetido.compra)); return; }
+  if (!iniciarActividad("Guardando número manual", `Ticket ${numero}…`)) return;
+  try {
+    verificarContextoActividad();
+    await updateDoc(doc(db, "purchases", id), { manualArchiveNumber: numero, lastModifiedByUid: currentUser.uid });
+  } catch (err) {
+    alert("No se pudo guardar el número.\n\nDetalle: " + err.message);
+  } finally {
+    terminarActividad();
+  }
+};
 
 // Guardar nueva obligación
 document.getElementById("btnNewObligation").addEventListener("click", async () => {
@@ -1725,10 +1867,20 @@ function reconciliarTicket(t) {
 fileReceiptInput.addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  if (!currentUser) { alert("Iniciá sesión primero."); return; }
+  if (!datosListos()) { fileReceiptInput.value = ""; return; }
+  const manualArchiveNumber = pedirNumeroManual(document.getElementById("scanArchiveInput"));
+  if (!manualArchiveNumber) { fileReceiptInput.value = ""; return; }
+  const repetido = buscarDuplicado({ manualArchiveNumber }, purchases);
+  if (repetido) {
+    alert("Ese número manual ya está cargado:\n\n" + resumenCompra(repetido.compra));
+    fileReceiptInput.value = "";
+    return;
+  }
+  if (!iniciarActividad("IA trabajando", `Leyendo el ticket ${manualArchiveNumber}… Podés seguir navegando.`)) return;
   scanLoadingIndicator.style.display = "block";
   try {
     const parsed = await leerTicketConGemini(file);
+    parsed.manualArchiveNumber = manualArchiveNumber;
     if (!parsed.items.length || parsed.totalPaid <= 0) {
       throw new Error("La IA no pudo leer productos o el total del ticket. Probá con una foto más clara y de frente.");
     }
@@ -1739,82 +1891,85 @@ fileReceiptInput.addEventListener("change", async (e) => {
   } finally {
     scanLoadingIndicator.style.display = "none";
     fileReceiptInput.value = "";
+    terminarActividad();
   }
 });
 
 async function processParsedTicket(parsed) {
-  // Aviso de posible ticket repetido (mismo comercio, mismo total y mismo día)
-  const diaDe = (f) => {
-    const d = f ? (f.toDate ? f.toDate() : new Date(f)) : new Date();
-    return d.toLocaleDateString("es-AR");
-  };
-  const repetido = purchases.find(p =>
-    (p.storeName || "").trim().toLowerCase() === (parsed.storeName || "").trim().toLowerCase() &&
-    Math.abs((p.totalPaid || 0) - parsed.totalPaid) < 0.01 &&
-    diaDe(p.date) === diaDe(parsed.date)
-  );
-  if (repetido && !confirm("Ya hay un comprobante de " + parsed.storeName + " por $" + parsed.totalPaid.toLocaleString("es-AR", { minimumFractionDigits: 2 }) + " con la misma fecha.\n\n¿Cargarlo igual? (Aceptar = cargar, Cancelar = no cargar)")) {
+  if (!datosListos()) return;
+  const manualArchiveNumber = numeroManual(parsed.manualArchiveNumber) || pedirNumeroManual(document.getElementById("scanArchiveInput"));
+  if (!manualArchiveNumber || !permitirTicket({ ...parsed, manualArchiveNumber })) return;
+  const actividadPropia = !actividadActual;
+  if (actividadPropia && !iniciarActividad("Guardando ticket", `Número manual ${manualArchiveNumber}…`)) return;
+  try {
+    verificarContextoActividad();
+    setEstadoHerramientas(`Guardando ticket ${manualArchiveNumber} y sus productos…`);
     modalScan.style.display = "none";
-    return;
-  }
-  modalScan.style.display = "none";
-  const isPersonal = activeSpace === "personal";
-  const hId = isPersonal ? "personal" : currentHousehold.id;
-  const memberUids = isPersonal ? [currentUser.uid] : (currentHousehold ? currentHousehold.memberUids : [currentUser.uid]);
+    const isPersonal = activeSpace === "personal";
+    const hId = isPersonal ? "personal" : currentHousehold.id;
+    const memberUids = isPersonal ? [currentUser.uid] : (currentHousehold ? currentHousehold.memberUids : [currentUser.uid]);
 
-  // Chequeo matemático
-  const sumLines = parsed.items.reduce((acc, i) => acc + i.lineTotal, 0);
-  const mathDiff = Math.abs(sumLines - parsed.totalPaid);
-  const isDoubtful = parsed.doubtfulNotes.length > 0 || (!parsed.reconciliado && mathDiff > 2.0);
+    // Chequeo matemático
+    const sumLines = parsed.items.reduce((acc, i) => acc + i.lineTotal, 0);
+    const mathDiff = Math.abs(sumLines - parsed.totalPaid);
+    const isDoubtful = parsed.doubtfulNotes.length > 0 || (!parsed.reconciliado && mathDiff > 2.0);
 
-  const purchaseRef = doc(collection(db, "purchases"));
-  const purchase = {
-    householdId: hId,
-    storeName: parsed.storeName,
-    receiptNumber: parsed.receiptNumber || "",
-    receiptType: parsed.receiptType || "",
-    date: parsed.date || serverTimestamp(),
-    subtotal: parsed.subtotal || parsed.totalPaid,
-    discountsTotal: parsed.discountsTotal || 0,
-    totalPaid: parsed.totalPaid,
-    cashbackAmount: parsed.cashbackAmount || 0,
-    effectiveCost: (parsed.totalPaid - (parsed.cashbackAmount || 0)),
-    paymentMethod: parsed.paymentMethod || "efectivo/transferencia",
-    status: isDoubtful ? "a_revisar" : "confirmado",
-    reviewNotes: isDoubtful ? (parsed.doubtfulNotes.length ? parsed.doubtfulNotes : [`Diferencia de sumas: líneas suman $${sumLines.toFixed(2)} vs total $${parsed.totalPaid.toFixed(2)}`]) : [],
-    createdByUid: currentUser.uid,
-    lastModifiedByUid: currentUser.uid,
-    memberUids: memberUids,
-    createdAt: serverTimestamp()
-  };
-
-  const batch = writeBatch(db);
-  batch.set(purchaseRef, purchase);
-
-  parsed.items.forEach(item => {
-    const itemRef = doc(collection(db, "purchase_items"));
-    batch.set(itemRef, {
-      purchaseId: purchaseRef.id,
+    const purchaseRef = doc(collection(db, "purchases"));
+    const purchase = {
       householdId: hId,
-      rawDescription: item.rawDescription,
-      canonicalProductName: item.canonicalProductName,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      lineTotal: item.lineTotal,
-      presentationValue: item.presentationValue || 1,
-      presentationUnit: item.presentationUnit || "unidad",
-      unitPriceNormalized: item.unitPriceNormalized || item.unitPrice,
-      brand: item.brand || "",
-      category: item.category || "Sin detalle",
-      discount: item.discount || 0,
-      isDoubtful: !!item.isDoubtful,
+      storeName: parsed.storeName,
+      receiptNumber: parsed.receiptNumber || "",
+      receiptType: parsed.receiptType || "",
+      date: parsed.date || serverTimestamp(),
+      subtotal: parsed.subtotal || parsed.totalPaid,
+      discountsTotal: parsed.discountsTotal || 0,
+      totalPaid: parsed.totalPaid,
+      cashbackAmount: parsed.cashbackAmount || 0,
+      effectiveCost: (parsed.totalPaid - (parsed.cashbackAmount || 0)),
+      paymentMethod: parsed.paymentMethod || "efectivo/transferencia",
+      status: isDoubtful ? "a_revisar" : "confirmado",
+      reviewNotes: isDoubtful ? (parsed.doubtfulNotes.length ? parsed.doubtfulNotes : [`Diferencia de sumas: líneas suman $${sumLines.toFixed(2)} vs total $${parsed.totalPaid.toFixed(2)}`]) : [],
+      manualArchiveNumber,
+      createdByUid: currentUser.uid,
+      lastModifiedByUid: currentUser.uid,
       memberUids: memberUids,
       createdAt: serverTimestamp()
-    });
-  });
+    };
 
-  await batch.commit();
-  alert(`¡Comprobante de ${parsed.storeName} registrado con éxito!`);
+    const batch = writeBatch(db);
+    batch.set(purchaseRef, purchase);
+
+    parsed.items.forEach(item => {
+      const itemRef = doc(collection(db, "purchase_items"));
+      batch.set(itemRef, {
+        purchaseId: purchaseRef.id,
+        householdId: hId,
+        rawDescription: item.rawDescription,
+        canonicalProductName: item.canonicalProductName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        lineTotal: item.lineTotal,
+        presentationValue: item.presentationValue || 1,
+        presentationUnit: item.presentationUnit || "unidad",
+        unitPriceNormalized: item.unitPriceNormalized || item.unitPrice,
+        brand: item.brand || "",
+        category: item.category || "Sin detalle",
+        discount: item.discount || 0,
+        isDoubtful: !!item.isDoubtful,
+        memberUids: memberUids,
+        createdAt: serverTimestamp()
+      });
+    });
+
+    await batch.commit();
+    document.getElementById("scanArchiveInput").value = "";
+    alert(`¡Comprobante de ${parsed.storeName} registrado con éxito!`);
+  } catch (err) {
+    if (!actividadPropia) throw err;
+    alert("No se pudo guardar el ticket.\n\nDetalle: " + err.message);
+  } finally {
+    if (actividadPropia) terminarActividad();
+  }
 }
 
 // -------------------------------------------------------------
@@ -1898,3 +2053,4 @@ function escapeHtml(text) {
   div.textContent = text;
   return div.innerHTML;
 }
+

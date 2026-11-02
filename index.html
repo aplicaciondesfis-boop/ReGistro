@@ -146,12 +146,17 @@
       </p>
 
       <div class="form-group">
+        <label class="form-label" for="scanArchiveInput">Número manual del ticket (obligatorio):</label>
+        <input type="text" id="scanArchiveInput" inputmode="numeric" maxlength="32" required class="form-input" placeholder="Ej: 142" aria-describedby="scanArchiveHelp">
+        <p id="scanArchiveHelp" class="card-meta">Ingresá el número único que escribiste a mano. No es el número fiscal del comprobante.</p>
+      </div>
+      <div class="form-group">
         <label class="form-label">Subir o sacar foto:</label>
         <input type="file" id="fileReceiptInput" accept="image/*" capture="environment" class="form-input">
       </div>
 
       <div style="margin: 16px 0; font-size: 0.85rem; font-weight: 600; color: var(--primary);">
-        O probá con tickets reales de Gualeguaychú:
+        Ejemplos de prueba (agregan datos ficticios):
       </div>
       <div style="display: flex; gap: 8px; margin-bottom: 16px;">
         <button id="btnSampleDia" class="btn-secondary" style="font-size: 0.85rem; padding: 8px;">Ticket DIA</button>
@@ -164,7 +169,7 @@
       </div>
 
       <div class="modal-actions">
-        <button id="btnCloseScanModal" class="btn-secondary">Cancelar</button>
+        <button id="btnCloseScanModal" class="btn-secondary">Cerrar y seguir navegando</button>
       </div>
     </div>
   </div>
@@ -217,8 +222,8 @@
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label">N° de Archivo Físico en papel (opcional):</label>
-        <input type="text" id="manualArchiveInput" class="form-input" placeholder="Ej: #142 con birome">
+        <label class="form-label" for="manualArchiveInput">Número manual del ticket (obligatorio):</label>
+        <input type="text" id="manualArchiveInput" inputmode="numeric" maxlength="32" required class="form-input" placeholder="Ej: 142">
       </div>
       <div class="modal-actions">
         <button id="btnCloseManualModal" class="btn-secondary">Cancelar</button>
@@ -270,3 +275,4 @@
 
 </body>
 </html>
+
