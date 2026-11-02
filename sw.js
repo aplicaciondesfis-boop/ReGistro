@@ -1,9 +1,10 @@
-const CACHE_NAME = 'finanzas-gchu-v3';
+const CACHE_NAME = 'finanzas-gchu-v4';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
+  './tickets.mjs',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
@@ -35,3 +36,4 @@ self.addEventListener('fetch', (e) => {
     fetch(e.request).catch(() => caches.match(e.request))
   );
 });
+
