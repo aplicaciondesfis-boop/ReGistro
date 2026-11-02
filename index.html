@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Finanzas Hogar • Gualeguaychú</title>
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#0F766E">
+  <meta name="theme-color" content="#0F6E8C">
   <link rel="icon" type="image/png" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
   <link rel="stylesheet" href="styles.css">
@@ -54,108 +54,84 @@
     <!-- Contenido una vez autenticado -->
     <div id="mainContent" style="display: none;">
 
-      <!-- Pestañas de Navegación -->
-      <div class="nav-tabs">
-        <button class="nav-tab-btn active" data-tab="resumen">
-          📊 Resumen
-        </button>
-        <button class="nav-tab-btn" data-tab="precios">
-          🏷 Precios Unitarios
-        </button>
-        <button class="nav-tab-btn" data-tab="obligaciones">
-          📅 Obligaciones
-        </button>
-        <button class="nav-tab-btn" data-tab="revision">
-          ⚠️ Revisión <span id="revisionBadge" class="badge" style="display: none;">0</span>
-        </button>
+      <!-- Título y acciones rápidas -->
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Finanzas del hogar</h1>
+          <p class="page-sub" id="pageSubtitle">Gastos, categorías, precios por producto y pendientes.</p>
+          <div class="space-label" id="summarySpaceLabel">RESUMEN DEL HOGAR</div>
+        </div>
+        <div class="action-buttons">
+          <button id="btnOpenScan" class="btn-primary">📷 Digitalizar comprobante</button>
+          <button id="btnOpenManual" class="btn-secondary">✍ Carga manual</button>
+        </div>
       </div>
 
-      <!-- PESTAÑA 1: RESUMEN Y GASTOS -->
+      <!-- Pestañas de Navegación -->
+      <div class="nav-tabs">
+        <button class="nav-tab-btn active" data-tab="resumen">Resumen</button>
+        <button class="nav-tab-btn" data-tab="categoria">Por categoría</button>
+        <button class="nav-tab-btn" data-tab="productos">Productos</button>
+        <button class="nav-tab-btn" data-tab="planilla">Planilla</button>
+        <button class="nav-tab-btn" data-tab="revision">Revisión y pendientes <span id="revisionBadge" class="badge" style="display: none;">0</span></button>
+      </div>
+
+      <!-- PESTAÑA 1: RESUMEN -->
       <section id="tab-resumen" class="tab-section">
-        
-        <!-- Acciones Rápidas -->
-        <div class="action-buttons">
-          <button id="btnOpenScan" class="btn-primary">
-            📷 Digitalizar Comprobante
-          </button>
-          <button id="btnOpenManual" class="btn-secondary">
-            ✍ Carga Manual
-          </button>
-        </div>
-
-        <!-- Métricas del Mes -->
-        <div class="dashboard-grid">
-          <div class="metric-card hero">
-            <div class="metric-label" id="summarySpaceLabel">RESUMEN DEL HOGAR</div>
-            <div class="metric-value" id="metricTotalPaid">$0.00 ARS</div>
-            <div class="metric-sub" id="metricRealCost">Costo Real Neto: $0.00 ARS</div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">Ahorro en Descuentos</div>
-            <div class="metric-value" id="metricDiscounts" style="color: var(--success); font-size: 1.5rem;">-$0.00</div>
-            <div class="card-meta">Promociones y cupones</div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">Reintegros / Cashback</div>
-            <div class="metric-value" id="metricCashback" style="color: var(--secondary); font-size: 1.5rem;">+$0.00</div>
-            <div class="card-meta">Devoluciones bancarias/QR</div>
-          </div>
-        </div>
-
-        <!-- Próximos Vencimientos -->
-        <div id="upcomingSection" style="margin-bottom: 24px; display: none;">
-          <div class="section-title">
-            <span>Próximos Vencimientos</span>
-          </div>
-          <div id="upcomingList" class="items-list"></div>
-        </div>
-
-        <!-- Compras y Comprobantes Recientes -->
-        <div class="section-title">
-          <span>Comprobantes y Gastos Recientes</span>
-          <span id="purchasesCount" style="font-size: 0.85rem; color: var(--text-muted); font-weight: normal;">0 registros</span>
-        </div>
-        <div id="purchasesList" class="items-list">
-          <div class="empty-state">No hay comprobantes cargados en este espacio.</div>
-        </div>
+        <div id="filtros-resumen" class="filtros"></div>
+        <div id="resumenKpis" class="kpis"></div>
+        <div id="resumenGraficos" class="graficos"></div>
+        <div class="section-title"><span>Compras</span><span id="resumenCount" class="muted"></span></div>
+        <div id="resumenCompras"></div>
       </section>
 
-      <!-- PESTAÑA 2: COMPARADOR DE PRECIOS -->
-      <section id="tab-precios" class="tab-section" style="display: none;">
-        <div style="margin-bottom: 16px;">
-          <input type="text" id="priceSearchInput" class="form-input" placeholder="🔍 Buscar producto (ej. leche, tapas de empanadas, pollo, arroz)...">
-        </div>
-        <div class="card-meta" style="margin-bottom: 12px;">
-          Compara el precio normalizado por kilo, litro o unidad neta entre DIA, Vea, Chinos y Pollerías.
-        </div>
-        <div id="priceComparisonList" class="items-list">
-          <div class="empty-state">No hay productos suficientes para comparar todavía.</div>
-        </div>
+      <!-- PESTAÑA 2: POR CATEGORÍA -->
+      <section id="tab-categoria" class="tab-section" style="display: none;">
+        <div id="filtros-categoria" class="filtros"></div>
+        <div id="categoriaContenido"></div>
       </section>
 
-      <!-- PESTAÑA 3: OBLIGACIONES Y SERVICIOS -->
-      <section id="tab-obligaciones" class="tab-section" style="display: none;">
-        <div style="background: var(--surface-variant); padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 0.85rem; border: 1px solid var(--border);">
-          💳 <strong>Control anti-duplicación:</strong> Los pagos de resúmenes de tarjeta son una salida de fondos para cancelar el saldo, ya que las compras individuales se registran en la fecha en que se realizaron.
+      <!-- PESTAÑA 3: PRODUCTOS (comparador de precios) -->
+      <section id="tab-productos" class="tab-section" style="display: none;">
+        <div id="productosResumen" class="muted" style="margin-bottom: 12px;"></div>
+        <div class="barra-herramientas">
+          <input type="text" id="prodSearch" class="form-input" placeholder="🔍 Buscar producto o marca">
+          <select id="prodOrden" class="filtro-select">
+            <option value="compras:desc">Más compras</option>
+            <option value="gasto:desc">Mayor gasto</option>
+            <option value="avg:desc">Precio más alto</option>
+            <option value="avg:asc">Precio más bajo</option>
+            <option value="nombre:asc">Nombre (A-Z)</option>
+            <option value="custom" disabled hidden>Orden por columna</option>
+          </select>
+          <label class="check-repetidos"><input type="checkbox" id="prodRepetidos"> Solo productos repetidos</label>
         </div>
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-          <div style="display: flex; gap: 8px;">
-            <button id="btnTabPendingObligations" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Pendientes</button>
-            <button id="btnTabPaidObligations" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Pagadas</button>
+        <div id="productosTabla"></div>
+      </section>
+
+      <!-- PESTAÑA 4: PLANILLA -->
+      <section id="tab-planilla" class="tab-section" style="display: none;">
+        <div id="planillaChips" class="chips">
+          <button class="chip active" data-sub="compras">Compras</button>
+          <button class="chip" data-sub="items">Ítems</button>
+          <button class="chip" data-sub="comercios">Comercios</button>
+          <button class="chip" data-sub="medios">Medios de pago</button>
+          <button class="chip" data-sub="obligaciones">Obligaciones</button>
+        </div>
+        <div id="filtros-planilla" class="filtros"></div>
+        <div class="barra-herramientas">
+          <input type="text" id="planillaSearch" class="form-input" placeholder="🔍 Buscar en esta tabla">
+          <span id="planillaCount" class="muted"></span>
+          <div id="obligacionesToolbar" style="display: none;">
+            <button id="btnNewObligation" class="btn-primary btn-compacto">+ Nueva obligación</button>
           </div>
-          <button id="btnNewObligation" class="btn-primary" style="padding: 8px 14px; font-size: 0.85rem;">+ Nueva Obligación</button>
         </div>
-        <div id="obligationsList" class="items-list"></div>
+        <div id="planillaContenido"></div>
       </section>
 
-      <!-- PESTAÑA 4: COLA DE REVISIÓN -->
+      <!-- PESTAÑA 5: REVISIÓN Y PENDIENTES -->
       <section id="tab-revision" class="tab-section" style="display: none;">
-        <div style="background: var(--warning-bg); border: 1px solid var(--warning); padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 0.85rem;">
-          ⚠️ <strong>Comprobantes a revisar:</strong> Tickets donde la suma de las líneas difiere del total pagado, datos dudosos o comercios no reconocidos automáticamente.
-        </div>
-        <div id="reviewQueueList" class="items-list">
-          <div class="empty-state">¡Excelente! No hay comprobantes pendientes de revisión.</div>
-        </div>
+        <div id="revisionContenido"></div>
       </section>
 
     </div>

@@ -77,7 +77,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "lectura real v7 - 28/10";
+versionTag.textContent = "lectura real v7 - 28/10 · diseño v1 - 01/11";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 
@@ -198,10 +198,7 @@ function listenData() {
       const db = b.date ? (b.date.toDate ? b.date.toDate() : new Date(b.date)) : new Date();
       return db - da;
     });
-    renderSummary();
-    renderPurchases();
-    renderReviewQueue();
-    renderPriceComparison();
+    renderAll();
   });
 
   // 2. Líneas de compra
@@ -211,7 +208,7 @@ function listenData() {
 
   unsubItems = onSnapshot(qItems, (snap) => {
     purchaseItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderPriceComparison();
+    renderAll();
   });
 
   // 3. Obligaciones
@@ -221,79 +218,60 @@ function listenData() {
 
   unsubObligations = onSnapshot(qObligations, (snap) => {
     obligations = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderObligations();
+    renderAll();
   });
 }
 
 // -------------------------------------------------------------
-// RENDERIZADO DE INTERFAZ
+// RENDERIZADO DE INTERFAZ (FRONTEND - diseño v1, 01/11/2026)
+// Pestañas: Resumen, Por categoría, Productos, Planilla, Revisión y pendientes
 // -------------------------------------------------------------
-function renderSummary() {
-  const totalPaid = purchases.reduce((acc, p) => acc + (p.totalPaid || 0), 0);
-  const totalDiscounts = purchases.reduce((acc, p) => acc + (p.discountsTotal || 0), 0);
-  const totalCashback = purchases.reduce((acc, p) => acc + (p.cashbackAmount || 0), 0);
-  const realCost = purchases.reduce((acc, p) => acc + (p.effectiveCost || p.totalPaid || 0), 0);
+const COLORES = ["#0F6E8C", "#E08A1E", "#2F9E6B", "#C0415E", "#7C5CC4", "#3B82C4", "#B8A21B", "#D2692F", "#4F9AA1", "#8A6F5C", "#7A8696"];
+const MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+const MEDIOS = {
+  "efectivo": "Efectivo",
+  "debito": "Tarjeta de débito",
+  "credito": "Tarjeta de crédito",
+  "qr_mercadopago": "Mercado Pago (QR)",
+  "transferencia": "Transferencia bancaria",
+  "efectivo/transferencia": "Efectivo / transferencia"
+};
 
-  document.getElementById("metricTotalPaid").textContent = `$${totalPaid.toLocaleString("es-AR", { minimumFractionDigits: 2 })} ARS`;
-  document.getElementById("metricRealCost").textContent = `Costo Real Neto: $${realCost.toLocaleString("es-AR", { minimumFractionDigits: 2 })} ARS`;
-  document.getElementById("metricDiscounts").textContent = `-$${totalDiscounts.toLocaleString("es-AR", { minimumFractionDigits: 2 })}`;
-  document.getElementById("metricCashback").textContent = `+$${totalCashback.toLocaleString("es-AR", { minimumFractionDigits: 2 })}`;
+// Filtros y orden que eligió la persona (se mantienen mientras la app está abierta)
+const ui = {
+  fecha: "todas", tienda: "todas", medio: "todos", categoria: "todas",
+  obligEstado: "todas", planillaSub: "compras"
+};
+const sortState = { productos: { key: "compras", dir: "desc" } }; // orden por tabla
+const filasAbiertas = new Set();                                   // filas desplegadas
 
-  const reviewNeeded = purchases.filter(p => p.status === "a_revisar").length;
-  if (reviewNeeded > 0) {
-    revisionBadge.textContent = reviewNeeded;
-    revisionBadge.style.display = "inline-block";
-  } else {
-    revisionBadge.style.display = "none";
-  }
+// ---------- Ayudas chicas ----------
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const sumar = (lista, f) => lista.reduce((a, x) => a + (Number(f(x)) || 0), 0);
+const aFecha = (f) => f ? (f.toDate ? f.toDate() : new Date(f)) : null;
+
+function moneda(n) {
+  n = Number(n) || 0;
+  const entero = Math.abs(n - Math.round(n)) < 0.005;
+  return "$ " + n.toLocaleString("es-AR", { minimumFractionDigits: entero ? 0 : 2, maximumFractionDigits: 2 });
 }
+function numEs(n, dec = 2) { return (Number(n) || 0).toLocaleString("es-AR", { maximumFractionDigits: dec }); }
+function medioLabel(m) { return m ? (MEDIOS[m] || m) : "Sin dato"; }
+function fechaCorta(d) { return d ? d.toLocaleDateString("es-AR", { day: "numeric", month: "numeric", year: "numeric" }) : "—"; }
+function horaDe(d) {
+  if (!d || (d.getHours() === 0 && d.getMinutes() === 0)) return "—";
+  return d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+function categoriaDe(i) { return (i.category && String(i.category).trim()) || "Sin detalle"; }
+function costoRealDe(p) { return p.effectiveCost != null ? p.effectiveCost : (p.totalPaid || 0) - (p.cashbackAmount || 0); }
+function unidadCorta(u) { return u === "kg" ? "/kg" : (u === "l" ? "/l" : "/u"); }
 
-function renderPurchases() {
-  const container = document.getElementById("purchasesList");
-  document.getElementById("purchasesCount").textContent = `${purchases.length} registros`;
-
-  if (purchases.length === 0) {
-    container.innerHTML = `<div class="empty-state">No hay comprobantes cargados en este espacio. Tocá en "Digitalizar Comprobante" o "Carga Manual".</div>`;
-    return;
-  }
-
-  container.innerHTML = purchases.map(p => {
-    const isReview = p.status === "a_revisar";
-    const dateObj = p.date ? (p.date.toDate ? p.date.toDate() : new Date(p.date)) : new Date();
-    const dateStr = dateObj.toLocaleDateString("es-AR");
-
-    return `
-      <div class="card-item ${isReview ? 'review-needed' : ''}">
-        <div class="card-header">
-          <div>
-            <div class="card-title">${escapeHtml(p.storeName || "Comercio")}</div>
-            <div class="card-meta">${dateStr} • ${escapeHtml(p.paymentMethod || "Efectivo")} ${p.manualArchiveNumber ? `• Archivo: <strong>${escapeHtml(p.manualArchiveNumber)}</strong>` : ''}</div>
-          </div>
-          <div style="text-align: right;">
-            <div class="card-price">$${(p.totalPaid || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>
-            ${p.discountsTotal > 0 ? `<div class="card-meta" style="color: var(--secondary)">Descuentos: -$${p.discountsTotal.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>` : ''}
-            ${p.cashbackAmount > 0 ? `<div class="card-meta" style="color: var(--secondary)">Reintegro: $${p.cashbackAmount.toLocaleString("es-AR", { minimumFractionDigits: 2 })} (${(p.cashbackAmount / (p.totalPaid || 1) * 100).toFixed(2).replace(".", ",")}%)</div>` : ''}
-          </div>
-        </div>
-        ${!isReview ? `
-          <div style="margin-top: 8px; display: flex; justify-content: flex-end; gap: 6px;">
-            <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="window.editarReintegro('${p.id}')">💸 ${p.cashbackAmount > 0 ? 'Editar reintegro' : 'Agregar reintegro'}</button>
-            <button class="btn-secondary" style="color: var(--danger); padding: 4px 10px; font-size: 0.75rem;" onclick="window.deletePurchase('${p.id}')">🗑 Eliminar</button>
-          </div>
-        ` : ''}
-        ${isReview ? `
-          <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
-            <span class="badge-pill warning">⚠️ Requiere revisión</span>
-            <span style="display: flex; gap: 6px;">
-              <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="window.editarReintegro('${p.id}')">💸 Reintegro</button>
-              <button class="btn-secondary" style="color: var(--danger); padding: 4px 10px; font-size: 0.75rem;" onclick="window.deletePurchase('${p.id}')">🗑 Eliminar</button>
-              <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="window.approvePurchase('${p.id}')">Aprobar</button>
-            </span>
-          </div>
-        ` : ''}
-      </div>
-    `;
-  }).join("");
+// Número correlativo de ticket (1 = el primero que se cargó)
+function numerarCompras() {
+  const t = (p) => (aFecha(p.createdAt) || aFecha(p.date) || new Date(0)).getTime();
+  const mapa = {};
+  [...purchases].sort((a, b) => t(a) - t(b)).forEach((p, i) => { mapa[p.id] = i + 1; });
+  return mapa;
 }
 
 // Factor por el que se multiplican los precios de un ticket para reflejar su reintegro
@@ -304,155 +282,580 @@ function factorReintegro(purchaseId) {
   return Math.max(0, 1 - Math.min(1, p.cashbackAmount / p.totalPaid));
 }
 
-function renderPriceComparison() {
-  const container = document.getElementById("priceComparisonList");
-  const search = document.getElementById("priceSearchInput").value.toLowerCase().trim();
+// ---------- Filtros ----------
+function listaTiendas() { return [...new Set(purchases.map(p => p.storeName).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es")); }
+function listaMedios() { return [...new Set(purchases.map(p => medioLabel(p.paymentMethod)))].sort((a, b) => a.localeCompare(b, "es")); }
+function listaCategorias() { return [...new Set(purchaseItems.map(categoriaDe))].sort((a, b) => a.localeCompare(b, "es")); }
 
-  const validItems = purchaseItems.filter(item => item.canonicalProductName && item.canonicalProductName !== "sin detalle");
-  const groups = {};
-
-  validItems.forEach(item => {
-    const key = item.canonicalProductName.toLowerCase().trim();
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(item);
+function opcionesFecha() {
+  const meses = new Set();
+  purchases.forEach(p => {
+    const d = aFecha(p.date);
+    if (d) meses.add(d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"));
   });
+  const lista = [["todas", "Todas las fechas"], ["este_mes", "Este mes"], ["mes_anterior", "Mes anterior"], ["30", "Últimos 30 días"]];
+  [...meses].sort().reverse().forEach(k => {
+    const [y, m] = k.split("-");
+    lista.push([k, MESES[Number(m) - 1] + " " + y]);
+  });
+  return lista;
+}
 
-  const rows = Object.keys(groups).map(key => {
-    const items = groups[key];
-    const prices = items.map(i => (i.unitPriceNormalized || i.unitPrice || 0) * factorReintegro(i.purchaseId)).filter(p => p > 0);
-    const min = prices.length ? Math.min(...prices) : 0;
-    const max = prices.length ? Math.max(...prices) : 0;
-    const avg = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : 0;
-
-    const purchaseIds = new Set(items.map(i => i.purchaseId));
-    const stores = Array.from(new Set(purchases.filter(p => purchaseIds.has(p.id)).map(p => p.storeName))).filter(Boolean);
-
-    return {
-      name: items[0].canonicalProductName,
-      min,
-      max,
-      avg,
-      stores,
-      items
-    };
-  }).filter(r => !search || r.name.toLowerCase().includes(search));
-
-  if (rows.length === 0) {
-    container.innerHTML = `<div class="empty-state">No hay productos que coincidan con la búsqueda.</div>`;
-    return;
+function coincideFecha(p) {
+  const f = ui.fecha;
+  if (f === "todas") return true;
+  const d = aFecha(p.date);
+  if (!d) return false;
+  const hoy = new Date();
+  if (f === "este_mes") return d.getFullYear() === hoy.getFullYear() && d.getMonth() === hoy.getMonth();
+  if (f === "mes_anterior") {
+    const a = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+    return d.getFullYear() === a.getFullYear() && d.getMonth() === a.getMonth();
   }
+  if (f === "30") return (hoy - d) / 86400000 <= 30;
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") === f;
+}
 
-  container.innerHTML = rows.map(r => {
-    const storeText = (r.stores.length > 1 ? `Varias (${r.stores.length} comercios)` : (r.stores[0] || "Comercio"))
-      + (r.items.some(i => factorReintegro(i.purchaseId) < 1) ? " • precio real con reintegro" : "");
-    return `
-      <div class="card-item" style="cursor: pointer;" onclick="this.querySelector('.history-detail').style.display = this.querySelector('.history-detail').style.display === 'none' ? 'block' : 'none'">
-        <div class="card-header">
-          <div>
-            <div class="card-title">${escapeHtml(r.name)}</div>
-            <div class="card-meta">🏪 ${escapeHtml(storeText)}</div>
-          </div>
-          <div style="text-align: right;">
-            <div class="card-price" style="color: var(--primary);">Prom: $${r.avg.toFixed(2)}</div>
-            <div class="card-meta">Rango: $${r.min.toFixed(0)} - $${r.max.toFixed(0)}</div>
-          </div>
-        </div>
-        <div class="history-detail" style="display: none; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px;">
-          <div style="font-weight: 600; font-size: 0.8rem; color: var(--primary); margin-bottom: 6px;">Historial de compras:</div>
-          ${r.items.map(i => {
-            const f = factorReintegro(i.purchaseId);
-            const norm = (i.unitPriceNormalized || i.unitPrice || 0) * f;
-            const pagado = (i.lineTotal || 0);
-            const textoPrecio = f < 1
-              ? `$${pagado.toFixed(2)} → real $${(pagado * f).toFixed(2)} ($${norm.toFixed(2)}/u)`
-              : `$${pagado.toFixed(2)} ($${norm.toFixed(2)}/u)`;
-            return `
-            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; padding: 3px 0;">
-              <span>${escapeHtml(i.rawDescription)} (Cant: ${i.quantity || 1})</span>
-              <strong>${textoPrecio}</strong>
-            </div>`;
-          }).join("")}
-        </div>
-      </div>
-    `;
+// usar: lista de filtros extra a aplicar además de la fecha ("tienda", "medio")
+function comprasFiltradas(usar = []) {
+  return purchases.filter(p =>
+    coincideFecha(p) &&
+    (!usar.includes("tienda") || ui.tienda === "todas" || p.storeName === ui.tienda) &&
+    (!usar.includes("medio") || ui.medio === "todos" || medioLabel(p.paymentMethod) === ui.medio)
+  );
+}
+
+function validarFiltros() {
+  if (ui.tienda !== "todas" && !listaTiendas().includes(ui.tienda)) ui.tienda = "todas";
+  if (ui.medio !== "todos" && !listaMedios().includes(ui.medio)) ui.medio = "todos";
+  if (ui.categoria !== "todas" && !listaCategorias().includes(ui.categoria)) ui.categoria = "todas";
+  if (!opcionesFecha().some(o => o[0] === ui.fecha)) ui.fecha = "todas";
+}
+
+function barraFiltros(campos) {
+  const defs = {
+    fecha: opcionesFecha(),
+    tienda: [["todas", "Todas las tiendas"], ...listaTiendas().map(t => [t, t])],
+    medio: [["todos", "Todos los medios"], ...listaMedios().map(m => [m, m])],
+    categoria: [["todas", "Todas las categorías"], ...listaCategorias().map(c => [c, c])],
+    obligEstado: [["todas", "Todos los estados"], ["pendiente", "Pendientes"], ["pagado", "Pagadas"]]
+  };
+  return campos.map(c =>
+    `<select class="filtro-select" data-filtro="${c}">` +
+    defs[c].map(([v, t]) => `<option value="${esc(v)}" ${ui[c] === v ? "selected" : ""}>${esc(t)}</option>`).join("") +
+    `</select>`
+  ).join("");
+}
+
+// ---------- Piezas visuales ----------
+function tarjetaKpi(titulo, valor, extra = "") {
+  return `<div class="kpi ${extra}"><div class="kpi-titulo">${esc(titulo)}</div><div class="kpi-valor">${valor}</div></div>`;
+}
+
+function barrasHtml(datos) {
+  if (!datos.length) return `<div class="vacio">Sin datos para mostrar.</div>`;
+  const max = Math.max(...datos.map(d => d.valor), 1);
+  return `<div class="barras">` + datos.map(d => `
+    <div class="barra-fila">
+      <span class="barra-nombre">${esc(d.nombre)}</span>
+      <span class="barra-pista"><span class="barra-relleno" style="width:${Math.max(2, d.valor / max * 100)}%"></span></span>
+      <span class="barra-valor">${moneda(d.valor)}</span>
+    </div>`).join("") + `</div>`;
+}
+
+function donutHtml(datos) {
+  datos = datos.filter(d => d.valor > 0);
+  const total = sumar(datos, d => d.valor);
+  if (!(total > 0)) return `<div class="vacio">Sin datos para mostrar.</div>`;
+  let acum = 0;
+  const tramos = datos.map((d, i) => {
+    const ini = acum / total * 100;
+    acum += d.valor;
+    return `${COLORES[i % COLORES.length]} ${ini}% ${acum / total * 100}%`;
+  });
+  const leyenda = datos.map((d, i) => `
+    <li>
+      <span class="punto" style="background:${COLORES[i % COLORES.length]}"></span>
+      <span class="ley-nombre">${esc(d.nombre)}</span>
+      <span class="ley-valor">${moneda(d.valor)}</span>
+      <span class="ley-pct">${Math.round(d.valor / total * 100)}%</span>
+    </li>`).join("");
+  return `<div class="donut-box">
+    <div class="donut" style="background: conic-gradient(${tramos.join(", ")})"><div class="donut-hueco"></div></div>
+    <ul class="leyenda">${leyenda}</ul>
+  </div>`;
+}
+
+function cardGrafico(titulo, contenido) {
+  return `<div class="card-grafico"><h3>${esc(titulo)}</h3>${contenido}</div>`;
+}
+
+// ---------- Tabla genérica: ordena al tocar el título y despliega filas ----------
+// cols: [{ key, label, num, cls, valor(r), render(r) }]   opc: { orden, detalle(r), vacio }
+function tablaHtml(id, cols, filas, opc = {}) {
+  if (!filas.length) return `<div class="vacio">${opc.vacio || "No hay datos para mostrar."}</div>`;
+  const st = sortState[id] || opc.orden || null;
+  const datos = [...filas];
+  if (st) {
+    const c = cols.find(x => x.key === st.key);
+    if (c) {
+      const val = c.valor || (r => r[c.key]);
+      datos.sort((a, b) => {
+        const x = val(a), y = val(b);
+        const r = (typeof x === "string" || typeof y === "string")
+          ? String(x ?? "").localeCompare(String(y ?? ""), "es")
+          : (x ?? 0) - (y ?? 0);
+        return st.dir === "asc" ? r : -r;
+      });
+    }
+  }
+  const cabecera = cols.map(c => {
+    const activo = st && st.key === c.key;
+    const flecha = activo ? (st.dir === "asc" ? " ▲" : " ▼") : "";
+    return `<th class="${c.cls || ""} ${c.num ? "num" : ""}" data-sort="${c.key}" data-tabla="${id}">${esc(c.label)}${flecha}</th>`;
   }).join("");
+  const cuerpo = datos.map(r => {
+    const clave = id + ":" + r.id;
+    const abierta = opc.detalle && filasAbiertas.has(clave);
+    const fila = `<tr class="${opc.detalle ? "expandible" : ""} ${abierta ? "abierta" : ""} ${r._clase || ""}" ${opc.detalle ? `data-fila="${esc(clave)}"` : ""}>` +
+      cols.map(c => `<td class="${c.cls || ""} ${c.num ? "num" : ""}">${c.render ? c.render(r) : esc(r[c.key])}</td>`).join("") + `</tr>`;
+    const detalle = abierta ? `<tr class="detalle-fila"><td colspan="${cols.length}">${opc.detalle(r)}</td></tr>` : "";
+    return fila + detalle;
+  }).join("");
+  return `<div class="tabla-wrap"><table class="tabla"><thead><tr>${cabecera}</tr></thead><tbody>${cuerpo}</tbody></table></div>`;
 }
 
-document.getElementById("priceSearchInput").addEventListener("input", renderPriceComparison);
-
-function renderObligations() {
-  const container = document.getElementById("obligationsList");
-  const upcomingContainer = document.getElementById("upcomingList");
-  const upcomingSection = document.getElementById("upcomingSection");
-
-  const pending = obligations.filter(o => o.status === "pendiente");
-  const paid = obligations.filter(o => o.status === "pagado");
-
-  // Próximos vencimientos para el dashboard
-  if (pending.length > 0) {
-    upcomingSection.style.display = "block";
-    upcomingContainer.innerHTML = pending.slice(0, 3).map(o => `
-      <div class="card-item" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px;">
-        <div>
-          <div style="font-weight: 600;">${escapeHtml(o.title)}</div>
-          <div class="card-meta">${escapeHtml(o.category)}</div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <strong>$${(o.amount || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</strong>
-          <button class="btn-secondary" style="padding: 4px 8px; font-size: 0.75rem;" onclick="window.toggleObligation('${o.id}', '${o.status}')">Pagar</button>
-        </div>
+// ---------- Detalle de un comprobante (se abre al tocar la fila) ----------
+function detalleCompra(p) {
+  const items = purchaseItems.filter(i => i.purchaseId === p.id);
+  const pct = p.totalPaid > 0 && p.cashbackAmount > 0 ? numEs(p.cashbackAmount / p.totalPaid * 100) + "%" : "";
+  const revisar = p.status === "a_revisar";
+  const filas = items.map(i => `
+    <tr>
+      <td>${esc(i.rawDescription || i.canonicalProductName)}${i.isDoubtful ? ' <span class="badge-pill warning">dudoso</span>' : ""}</td>
+      <td class="num">${numEs(i.quantity || 1, 3)}</td>
+      <td class="num hide-sm">${moneda(i.unitPrice)}</td>
+      <td class="num hide-sm">${i.discount > 0 ? "-" + moneda(i.discount) : "—"}</td>
+      <td class="num">${moneda(i.lineTotal)}</td>
+    </tr>`).join("");
+  return `
+    <div class="detalle-compra">
+      <div class="detalle-meta">
+        <span>💳 ${esc(medioLabel(p.paymentMethod))}</span>
+        ${p.receiptNumber ? `<span>🧾 ${esc(p.receiptNumber)}</span>` : ""}
+        ${p.manualArchiveNumber ? `<span>🗂 Archivo: <strong>${esc(p.manualArchiveNumber)}</strong></span>` : ""}
+        ${p.discountsTotal > 0 ? `<span class="verde">Ahorro: ${moneda(p.discountsTotal)}</span>` : ""}
+        ${p.cashbackAmount > 0 ? `<span class="azul">Reintegro: ${moneda(p.cashbackAmount)} (${pct})</span>` : ""}
       </div>
-    `).join("");
+      ${p.reviewNotes && p.reviewNotes.length ? `<div class="notas-revision">${p.reviewNotes.map(n => `<div>• ${esc(n)}</div>`).join("")}</div>` : ""}
+      ${items.length ? `<div class="tabla-wrap"><table class="tabla mini"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num hide-sm">Precio</th><th class="num hide-sm">Desc.</th><th class="num">Total</th></tr></thead><tbody>${filas}</tbody></table></div>` : `<div class="vacio">Sin detalle de productos.</div>`}
+      <div class="detalle-acciones">
+        <button class="btn-chico" onclick="window.editarReintegro('${p.id}')">💸 ${p.cashbackAmount > 0 ? "Editar reintegro" : "Agregar reintegro"}</button>
+        ${revisar ? `<button class="btn-chico btn-ok" onclick="window.approvePurchase('${p.id}')">✓ Aprobar</button>` : ""}
+        <button class="btn-chico btn-peligro" onclick="window.deletePurchase('${p.id}')">🗑 Eliminar</button>
+      </div>
+    </div>`;
+}
+
+// ---------- Columnas de las tablas de compras ----------
+function colsCompras(tipo, nums) {
+  const nro = { key: "n", label: "Nº", valor: r => nums[r.id] || 0, render: r => nums[r.id] || "—" };
+  const fechaHora = { key: "fecha", label: "Fecha", valor: r => (aFecha(r.date) || 0).valueOf(), render: r => { const d = aFecha(r.date); const h = horaDe(d); return fechaCorta(d) + (h !== "—" ? ` <span class="suave">· ${h}</span>` : ""); } };
+  const tienda = { key: "storeName", label: "Tienda", valor: r => r.storeName || "" };
+  const medio = { key: "medio", label: "Medio de pago", cls: "hide-sm", valor: r => medioLabel(r.paymentMethod), render: r => esc(medioLabel(r.paymentMethod)) };
+  const total = { key: "totalPaid", label: "Total pagado", num: true, valor: r => r.totalPaid || 0, render: r => moneda(r.totalPaid) };
+  if (tipo === "resumen") {
+    return [{ ...nro, cls: "hide-sm" }, fechaHora, tienda, medio, total,
+      { key: "cashbackAmount", label: "Reintegro", num: true, cls: "hide-sm", valor: r => r.cashbackAmount || 0, render: r => r.cashbackAmount > 0 ? moneda(r.cashbackAmount) : "—" },
+      { key: "costo", label: "Costo real", num: true, valor: r => costoRealDe(r), render: r => moneda(costoRealDe(r)) },
+      { key: "status", label: "Control", cls: "centro", valor: r => r.status === "a_revisar" ? 0 : 1, render: r => r.status === "a_revisar" ? '<span class="control-warn" title="A revisar">⚠</span>' : '<span class="control-ok" title="Confirmado">✓</span>' }
+    ];
+  }
+  // planilla
+  return [nro,
+    { key: "fecha", label: "Fecha", valor: r => (aFecha(r.date) || 0).valueOf(), render: r => fechaCorta(aFecha(r.date)) },
+    { key: "hora", label: "Hora", cls: "hide-sm", valor: r => horaDe(aFecha(r.date)), render: r => horaDe(aFecha(r.date)) },
+    { key: "storeName", label: "Comercio", valor: r => r.storeName || "" },
+    medio,
+    { key: "tipo", label: "Comprobante", cls: "hide-sm", valor: r => r.receiptType || "", render: r => esc(r.receiptType || "—") },
+    { key: "nro", label: "N° comprobante", cls: "hide-sm", valor: r => r.receiptNumber || "", render: r => esc(r.receiptNumber || "—") },
+    total
+  ];
+}
+
+// ---------- Dibujo principal ----------
+function renderAll() {
+  try {
+    validarFiltros();
+    renderEncabezado();
+    renderResumen();
+    renderCategorias();
+    renderProductos();
+    renderPlanilla();
+    renderRevision();
+  } catch (err) {
+    console.error("Error dibujando la pantalla:", err);
+  }
+}
+
+function renderEncabezado() {
+  const fechas = purchases.map(p => aFecha(p.date)).filter(Boolean).sort((a, b) => b - a);
+  const ultima = fechas.length ? ` Última compra: ${fechaCorta(fechas[0])}.` : "";
+  document.getElementById("pageSubtitle").textContent =
+    `Gastos, categorías, precios por producto y pendientes. ${purchases.length} comprobantes cargados.${ultima}`;
+
+  const aRevisar = purchases.filter(p => p.status === "a_revisar").length;
+  const pendientes = obligations.filter(o => o.status === "pendiente").length;
+  const total = aRevisar + pendientes;
+  if (total > 0) {
+    revisionBadge.textContent = total;
+    revisionBadge.style.display = "inline-block";
   } else {
-    upcomingSection.style.display = "none";
+    revisionBadge.style.display = "none";
   }
-
-  container.innerHTML = obligations.map(o => `
-    <div class="card-item" style="display: flex; justify-content: space-between; align-items: center;">
-      <div>
-        <div class="card-title">${escapeHtml(o.title)}</div>
-        <div class="card-meta">${escapeHtml(o.category)} • ${o.isRecurring ? 'Recurrente' : 'Puntual'} ${o.isCreditCardSettlement ? '• Resumen Tarjeta' : ''}</div>
-      </div>
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span class="card-price" style="color: ${o.status === 'pagado' ? 'var(--success)' : 'var(--primary)'}">$${(o.amount || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</span>
-        <button class="btn-secondary" style="padding: 6px 10px; font-size: 0.8rem;" onclick="window.toggleObligation('${o.id}', '${o.status}')">
-          ${o.status === 'pagado' ? '✓ Pagado' : 'Marcar Pago'}
-        </button>
-      </div>
-    </div>
-  `).join("");
 }
 
-function renderReviewQueue() {
-  const container = document.getElementById("reviewQueueList");
-  const reviewItems = purchases.filter(p => p.status === "a_revisar");
+// ----- Pestaña 1: RESUMEN -----
+function renderResumen() {
+  document.getElementById("filtros-resumen").innerHTML = barraFiltros(["fecha", "tienda", "medio"]);
+  const lista = comprasFiltradas(["tienda", "medio"]);
 
-  if (reviewItems.length === 0) {
-    container.innerHTML = `<div class="empty-state">¡Excelente! No hay comprobantes pendientes de revisión.</div>`;
-    return;
+  document.getElementById("resumenKpis").innerHTML =
+    tarjetaKpi("Total pagado", moneda(sumar(lista, p => p.totalPaid))) +
+    tarjetaKpi("Reintegros", moneda(sumar(lista, p => p.cashbackAmount)), "kpi-azul") +
+    tarjetaKpi("Costo real (neto de reintegros)", moneda(sumar(lista, costoRealDe)), "destacado") +
+    tarjetaKpi("Descuentos en tickets", moneda(sumar(lista, p => p.discountsTotal)), "kpi-verde") +
+    tarjetaKpi("Compras registradas", String(lista.length));
+
+  const porTienda = {};
+  const porMedio = {};
+  lista.forEach(p => {
+    const t = p.storeName || "Comercio";
+    porTienda[t] = (porTienda[t] || 0) + (p.totalPaid || 0);
+    const m = medioLabel(p.paymentMethod);
+    porMedio[m] = (porMedio[m] || 0) + (p.totalPaid || 0);
+  });
+  const ordenar = (obj) => Object.entries(obj).map(([nombre, valor]) => ({ nombre, valor })).sort((a, b) => b.valor - a.valor);
+
+  document.getElementById("resumenGraficos").innerHTML =
+    cardGrafico("Total pagado por tienda", barrasHtml(ordenar(porTienda))) +
+    cardGrafico("Total pagado por medio de pago", donutHtml(ordenar(porMedio)));
+
+  document.getElementById("resumenCount").textContent = `${lista.length} registros · tocá una fila para ver el detalle`;
+  document.getElementById("resumenCompras").innerHTML = tablaHtml(
+    "compras-resumen", colsCompras("resumen", numerarCompras()), lista,
+    { orden: { key: "fecha", dir: "desc" }, detalle: detalleCompra, vacio: "No hay comprobantes con estos filtros." }
+  );
+}
+
+// ----- Pestaña 2: POR CATEGORÍA -----
+function renderCategorias() {
+  document.getElementById("filtros-categoria").innerHTML = barraFiltros(["fecha", "categoria", "tienda"]);
+  const ids = new Set(comprasFiltradas(["tienda"]).map(p => p.id));
+  const items = purchaseItems.filter(i => ids.has(i.purchaseId) && (ui.categoria === "todas" || categoriaDe(i) === ui.categoria));
+
+  const gasto = {};
+  const ahorro = {};
+  items.forEach(i => {
+    const c = categoriaDe(i);
+    gasto[c] = (gasto[c] || 0) + (i.lineTotal || 0);
+    ahorro[c] = (ahorro[c] || 0) + (i.discount || 0);
+  });
+  const ordenar = (obj) => Object.entries(obj).map(([nombre, valor]) => ({ nombre, valor })).sort((a, b) => b.valor - a.valor);
+
+  const sinCategorias = purchaseItems.length > 0 && purchaseItems.every(i => categoriaDe(i) === "Sin detalle");
+  const aviso = sinCategorias
+    ? `<div class="aviso">ℹ️ Todavía ningún producto tiene categoría asignada, por eso todo aparece como "Sin detalle". Cuando la IA las asigne al leer los tickets, este gráfico se completa solo.</div>`
+    : "";
+
+  document.getElementById("categoriaContenido").innerHTML = aviso + `<div class="graficos">` +
+    cardGrafico("Gasto por categoría (neto de descuentos)", donutHtml(ordenar(gasto))) +
+    cardGrafico("Ahorro por descuentos, por categoría", barrasHtml(ordenar(ahorro).filter(d => d.valor > 0))) +
+    `</div>`;
+}
+
+// ----- Pestaña 3: PRODUCTOS -----
+function agruparProductos() {
+  const grupos = {};
+  purchaseItems.forEach(i => {
+    const nombre = (i.canonicalProductName || "").trim();
+    if (!nombre || nombre.toLowerCase() === "sin detalle") return;
+    const k = nombre.toLowerCase();
+    (grupos[k] = grupos[k] || []).push(i);
+  });
+  const compraDe = {};
+  purchases.forEach(p => { compraDe[p.id] = p; });
+
+  return Object.keys(grupos).map(k => {
+    const items = grupos[k];
+    const precios = items.map(i => (i.unitPriceNormalized || i.unitPrice || 0) * factorReintegro(i.purchaseId)).filter(x => x > 0);
+    const tiendas = [...new Set(items.map(i => compraDe[i.purchaseId] && compraDe[i.purchaseId].storeName).filter(Boolean))];
+    const cuentaUnidad = {};
+    items.forEach(i => { const u = i.presentationUnit || "unidad"; cuentaUnidad[u] = (cuentaUnidad[u] || 0) + 1; });
+    const unidad = Object.entries(cuentaUnidad).sort((a, b) => b[1] - a[1])[0][0];
+    return {
+      id: k,
+      nombre: items[0].canonicalProductName,
+      items, tiendas, unidad, compraDe,
+      compras: new Set(items.map(i => i.purchaseId)).size,
+      min: precios.length ? Math.min(...precios) : 0,
+      max: precios.length ? Math.max(...precios) : 0,
+      avg: precios.length ? sumar(precios, x => x) / precios.length : 0,
+      gasto: sumar(items, i => i.lineTotal)
+    };
+  });
+}
+
+function detalleProducto(g) {
+  const precioReal = (i) => (i.unitPriceNormalized || i.unitPrice || 0) * factorReintegro(i.purchaseId);
+  const conPrecio = g.items.filter(i => precioReal(i) > 0);
+  const mejor = conPrecio.length ? Math.min(...conPrecio.map(precioReal)) : null;
+  const ordenados = [...g.items].sort((a, b) => ((aFecha((g.compraDe[b.purchaseId] || {}).date) || 0) - (aFecha((g.compraDe[a.purchaseId] || {}).date) || 0)));
+  const filas = ordenados.map(i => {
+    const p = g.compraDe[i.purchaseId] || {};
+    const pr = precioReal(i);
+    const f = factorReintegro(i.purchaseId);
+    const pagado = f < 1 ? `${moneda(i.lineTotal)} <span class="suave">→ ${moneda(i.lineTotal * f)}</span>` : moneda(i.lineTotal);
+    return `<tr class="${mejor !== null && pr === mejor ? "mejor" : ""}">
+      <td>${fechaCorta(aFecha(p.date))}</td>
+      <td>${esc(p.storeName || "—")}</td>
+      <td class="hide-sm">${esc(i.brand || i.rawDescription || "—")}</td>
+      <td class="hide-sm">${i.presentationValue ? numEs(i.presentationValue, 3) + " " + esc(i.presentationUnit || "") : "—"}</td>
+      <td class="num">${numEs(i.quantity || 1, 3)}</td>
+      <td class="num hide-sm">${pagado}</td>
+      <td class="num"><strong>${moneda(pr)}</strong> <span class="suave">${unidadCorta(g.unidad)}</span></td>
+    </tr>`;
+  }).join("");
+  return `<div class="detalle-meta" style="margin-bottom:8px;"><span>Gasto total: <strong>${moneda(g.gasto)}</strong></span><span>Rango: ${moneda(g.min)} – ${moneda(g.max)} <span class="suave">${unidadCorta(g.unidad)}</span></span></div>
+    <div class="tabla-wrap"><table class="tabla mini"><thead><tr>
+      <th>Fecha</th><th>Tienda</th><th class="hide-sm">Marca / detalle</th><th class="hide-sm">Presentación</th><th class="num">Cant.</th><th class="num hide-sm">Pagado</th><th class="num">Precio ${unidadCorta(g.unidad)}</th>
+    </tr></thead><tbody>${filas}</tbody></table></div>
+    <div class="suave" style="margin-top:6px;">En verde: el precio más barato. Si el ticket tuvo reintegro, el precio ya lo descuenta.</div>`;
+}
+
+function renderProductos() {
+  const busqueda = document.getElementById("prodSearch").value.toLowerCase().trim();
+  const soloRepetidos = document.getElementById("prodRepetidos").checked;
+  const todos = agruparProductos();
+
+  document.getElementById("productosResumen").textContent =
+    `${todos.length} productos distintos · ${purchaseItems.length} líneas de compra · ${purchases.length} tickets`;
+
+  const filas = todos.filter(g =>
+    (!soloRepetidos || g.compras >= 2) &&
+    (!busqueda || g.items.some(i => `${i.canonicalProductName} ${i.brand || ""} ${i.rawDescription || ""}`.toLowerCase().includes(busqueda)))
+  );
+
+  // El selector de orden refleja el orden actual
+  const st = sortState.productos;
+  const sel = document.getElementById("prodOrden");
+  const valor = st.key + ":" + st.dir;
+  sel.value = [...sel.options].some(o => o.value === valor) ? valor : "custom";
+
+  const cols = [
+    { key: "nombre", label: "Producto", valor: g => g.nombre, render: g => `<span class="flecha">›</span> <strong>${esc(g.nombre)}</strong>` },
+    { key: "compras", label: "Compras", num: true, valor: g => g.compras },
+    { key: "tienda", label: "Tienda", cls: "hide-sm", valor: g => g.tiendas.length > 1 ? "Varias" : (g.tiendas[0] || ""), render: g => g.tiendas.length > 1 ? `Varias <span class="suave">(${g.tiendas.length})</span>` : esc(g.tiendas[0] || "—") },
+    { key: "avg", label: "Precio promedio", num: true, valor: g => g.avg, render: g => `${moneda(g.avg)} <span class="suave">${unidadCorta(g.unidad)}</span>` },
+    { key: "rango", label: "Mínimo – máximo", num: true, cls: "hide-sm", valor: g => g.min, render: g => `${moneda(g.min)} – ${moneda(g.max)}` },
+    { key: "gasto", label: "Gasto total", num: true, cls: "hide-sm", valor: g => g.gasto, render: g => moneda(g.gasto) }
+  ];
+  document.getElementById("productosTabla").innerHTML = tablaHtml(
+    "productos", cols, filas,
+    { detalle: detalleProducto, vacio: "No hay productos que coincidan con la búsqueda." }
+  );
+}
+
+// ----- Pestaña 4: PLANILLA -----
+function renderPlanilla() {
+  const sub = ui.planillaSub;
+  document.querySelectorAll("#planillaChips .chip").forEach(c => c.classList.toggle("active", c.dataset.sub === sub));
+  document.getElementById("obligacionesToolbar").style.display = sub === "obligaciones" ? "flex" : "none";
+
+  const camposFiltro = { compras: ["fecha", "tienda", "medio"], items: ["fecha", "tienda", "medio"], comercios: ["fecha"], medios: ["fecha"], obligaciones: ["obligEstado"] };
+  document.getElementById("filtros-planilla").innerHTML = barraFiltros(camposFiltro[sub]);
+
+  const q = document.getElementById("planillaSearch").value.toLowerCase().trim();
+  const coincide = (texto) => !q || texto.toLowerCase().includes(q);
+  const nums = numerarCompras();
+  let filas = [];
+  let html = "";
+
+  if (sub === "compras") {
+    filas = comprasFiltradas(["tienda", "medio"]).filter(p => coincide(`${p.storeName} ${medioLabel(p.paymentMethod)} ${p.receiptNumber || ""} ${p.receiptType || ""} ${fechaCorta(aFecha(p.date))}`));
+    html = tablaHtml("planilla-compras", colsCompras("planilla", nums), filas,
+      { orden: { key: "fecha", dir: "desc" }, detalle: detalleCompra, vacio: "No hay comprobantes con estos filtros." });
+  } else if (sub === "items") {
+    const compraDe = {};
+    comprasFiltradas(["tienda", "medio"]).forEach(p => { compraDe[p.id] = p; });
+    filas = purchaseItems.filter(i => compraDe[i.purchaseId]).map(i => ({ ...i, _p: compraDe[i.purchaseId] }))
+      .filter(i => coincide(`${i.rawDescription} ${i.canonicalProductName} ${i.brand || ""} ${i._p.storeName}`));
+    const cols = [
+      { key: "fecha", label: "Fecha", valor: r => (aFecha(r._p.date) || 0).valueOf(), render: r => fechaCorta(aFecha(r._p.date)) },
+      { key: "tienda", label: "Comercio", cls: "hide-sm", valor: r => r._p.storeName || "", render: r => esc(r._p.storeName) },
+      { key: "rawDescription", label: "Producto", valor: r => r.rawDescription || "" },
+      { key: "brand", label: "Marca", cls: "hide-sm", valor: r => r.brand || "", render: r => esc(r.brand || "—") },
+      { key: "quantity", label: "Cant.", num: true, valor: r => r.quantity || 0, render: r => numEs(r.quantity || 1, 3) },
+      { key: "unitPrice", label: "Precio", num: true, cls: "hide-sm", valor: r => r.unitPrice || 0, render: r => moneda(r.unitPrice) },
+      { key: "discount", label: "Desc.", num: true, cls: "hide-sm", valor: r => r.discount || 0, render: r => r.discount > 0 ? "-" + moneda(r.discount) : "—" },
+      { key: "lineTotal", label: "Total", num: true, valor: r => r.lineTotal || 0, render: r => moneda(r.lineTotal) },
+      { key: "norm", label: "Precio kg/l/u", num: true, cls: "hide-sm", valor: r => r.unitPriceNormalized || 0, render: r => `${moneda(r.unitPriceNormalized)} <span class="suave">${unidadCorta(r.presentationUnit)}</span>` }
+    ];
+    html = tablaHtml("planilla-items", cols, filas, { orden: { key: "fecha", dir: "desc" }, vacio: "No hay productos con estos filtros." });
+  } else if (sub === "comercios") {
+    const mapa = {};
+    comprasFiltradas().forEach(p => {
+      const t = p.storeName || "Comercio";
+      const m = mapa[t] = mapa[t] || { id: t, tienda: t, compras: 0, total: 0, desc: 0, reint: 0, ultima: 0 };
+      m.compras++; m.total += p.totalPaid || 0; m.desc += p.discountsTotal || 0; m.reint += p.cashbackAmount || 0;
+      m.ultima = Math.max(m.ultima, (aFecha(p.date) || 0).valueOf());
+    });
+    filas = Object.values(mapa).filter(m => coincide(m.tienda));
+    const cols = [
+      { key: "tienda", label: "Comercio", valor: r => r.tienda },
+      { key: "compras", label: "Compras", num: true, valor: r => r.compras },
+      { key: "total", label: "Total pagado", num: true, valor: r => r.total, render: r => moneda(r.total) },
+      { key: "prom", label: "Ticket promedio", num: true, cls: "hide-sm", valor: r => r.total / r.compras, render: r => moneda(r.total / r.compras) },
+      { key: "desc", label: "Descuentos", num: true, cls: "hide-sm", valor: r => r.desc, render: r => moneda(r.desc) },
+      { key: "reint", label: "Reintegros", num: true, cls: "hide-sm", valor: r => r.reint, render: r => moneda(r.reint) },
+      { key: "ultima", label: "Última compra", num: true, valor: r => r.ultima, render: r => fechaCorta(r.ultima ? new Date(r.ultima) : null) }
+    ];
+    html = tablaHtml("planilla-comercios", cols, filas, { orden: { key: "total", dir: "desc" } });
+  } else if (sub === "medios") {
+    const mapa = {};
+    const lista = comprasFiltradas();
+    const totalGral = sumar(lista, p => p.totalPaid);
+    lista.forEach(p => {
+      const t = medioLabel(p.paymentMethod);
+      const m = mapa[t] = mapa[t] || { id: t, medio: t, compras: 0, total: 0 };
+      m.compras++; m.total += p.totalPaid || 0;
+    });
+    filas = Object.values(mapa).filter(m => coincide(m.medio));
+    const cols = [
+      { key: "medio", label: "Medio de pago", valor: r => r.medio },
+      { key: "compras", label: "Compras", num: true, valor: r => r.compras },
+      { key: "total", label: "Total pagado", num: true, valor: r => r.total, render: r => moneda(r.total) },
+      { key: "pct", label: "% del total", num: true, valor: r => r.total, render: r => totalGral > 0 ? numEs(r.total / totalGral * 100, 1) + "%" : "—" }
+    ];
+    html = tablaHtml("planilla-medios", cols, filas, { orden: { key: "total", dir: "desc" } });
+  } else {
+    filas = obligations.filter(o => (ui.obligEstado === "todas" || o.status === ui.obligEstado) && coincide(`${o.title} ${o.category || ""}`));
+    const cols = [
+      { key: "title", label: "Concepto", valor: o => o.title || "" },
+      { key: "category", label: "Categoría", cls: "hide-sm", valor: o => o.category || "", render: o => esc(o.category || "—") },
+      { key: "tipo", label: "Tipo", cls: "hide-sm", valor: o => o.isRecurring ? "Recurrente" : "Puntual", render: o => (o.isRecurring ? "Recurrente" : "Puntual") + (o.isCreditCardSettlement ? " · Resumen tarjeta" : "") },
+      { key: "amount", label: "Monto", num: true, valor: o => o.amount || 0, render: o => moneda(o.amount) },
+      { key: "status", label: "Estado", cls: "centro", valor: o => o.status || "", render: o => `<button class="btn-chico ${o.status === "pagado" ? "btn-ok" : ""}" onclick="window.toggleObligation('${o.id}', '${o.status}')">${o.status === "pagado" ? "✓ Pagado" : "Marcar pago"}</button>` }
+    ];
+    html = tablaHtml("planilla-obligaciones", cols, filas, { orden: { key: "status", dir: "desc" }, vacio: "No hay obligaciones cargadas." }) +
+      `<div class="aviso" style="margin-top:12px;">💳 <strong>Control anti-duplicación:</strong> el pago de un resumen de tarjeta es una salida de fondos para cancelar el saldo; las compras individuales ya se registran en la fecha en que se hicieron.</div>`;
   }
 
-  container.innerHTML = reviewItems.map(p => `
+  document.getElementById("planillaCount").textContent = `${filas.length} registros`;
+  document.getElementById("planillaContenido").innerHTML = html;
+}
+
+// ----- Pestaña 5: REVISIÓN Y PENDIENTES -----
+function renderRevision() {
+  const aRevisar = purchases.filter(p => p.status === "a_revisar");
+  const pendientes = obligations.filter(o => o.status === "pendiente");
+  const compraDe = {};
+  purchases.forEach(p => { compraDe[p.id] = p; });
+  const dudosos = purchaseItems.filter(i => i.isDoubtful && compraDe[i.purchaseId]);
+
+  let html = `<div class="section-title"><span>Comprobantes a revisar</span><span class="muted">${aRevisar.length}</span></div>
+    <div class="aviso aviso-warn">⚠️ Tickets donde la suma de las líneas no coincide con el total pagado, con datos dudosos o con comercios no reconocidos.</div>`;
+
+  html += aRevisar.length ? `<div class="items-list">` + aRevisar.map(p => `
     <div class="card-item review-needed">
       <div class="card-header">
         <div>
-          <div class="card-title">${escapeHtml(p.storeName)}</div>
-          <div class="card-meta">${p.date ? new Date(p.date.toDate ? p.date.toDate() : p.date).toLocaleDateString("es-AR") : ''} • ${escapeHtml(p.paymentMethod)}</div>
+          <div class="card-title">${esc(p.storeName || "Comercio")}</div>
+          <div class="card-meta">${fechaCorta(aFecha(p.date))} · ${esc(medioLabel(p.paymentMethod))}</div>
         </div>
-        <div class="card-price">$${(p.totalPaid || 0).toFixed(2)}</div>
+        <div class="card-price">${moneda(p.totalPaid)}</div>
       </div>
-      ${p.reviewNotes && p.reviewNotes.length ? `
-        <div style="margin: 8px 0; font-size: 0.8rem; background: rgba(0,0,0,0.05); padding: 6px 10px; border-radius: 6px;">
-          ${p.reviewNotes.map(n => `<div>• ${escapeHtml(n)}</div>`).join("")}
-        </div>
-      ` : ''}
-      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
-        <button class="btn-secondary" style="color: var(--danger); padding: 6px 12px; font-size: 0.8rem;" onclick="window.deletePurchase('${p.id}')">Eliminar</button>
-        <button class="btn-primary" style="padding: 6px 14px; font-size: 0.8rem;" onclick="window.approvePurchase('${p.id}')">Aprobar</button>
+      ${p.reviewNotes && p.reviewNotes.length ? `<div class="notas-revision">${p.reviewNotes.map(n => `<div>• ${esc(n)}</div>`).join("")}</div>` : ""}
+      <div class="detalle-acciones">
+        <button class="btn-chico" onclick="window.editarReintegro('${p.id}')">💸 Reintegro</button>
+        <button class="btn-chico btn-peligro" onclick="window.deletePurchase('${p.id}')">🗑 Eliminar</button>
+        <button class="btn-chico btn-ok" onclick="window.approvePurchase('${p.id}')">✓ Aprobar</button>
       </div>
-    </div>
-  `).join("");
+    </div>`).join("") + `</div>`
+    : `<div class="vacio">¡Excelente! No hay comprobantes pendientes de revisión.</div>`;
+
+  if (dudosos.length) {
+    const cols = [
+      { key: "fecha", label: "Fecha", valor: r => (aFecha(compraDe[r.purchaseId].date) || 0).valueOf(), render: r => fechaCorta(aFecha(compraDe[r.purchaseId].date)) },
+      { key: "tienda", label: "Tienda", cls: "hide-sm", valor: r => compraDe[r.purchaseId].storeName || "", render: r => esc(compraDe[r.purchaseId].storeName) },
+      { key: "rawDescription", label: "Producto dudoso", valor: r => r.rawDescription || "" },
+      { key: "lineTotal", label: "Total", num: true, valor: r => r.lineTotal || 0, render: r => moneda(r.lineTotal) }
+    ];
+    html += `<div class="section-title" style="margin-top:24px;"><span>Productos dudosos</span><span class="muted">${dudosos.length}</span></div>` +
+      tablaHtml("dudosos", cols, dudosos, { orden: { key: "fecha", dir: "desc" } });
+  }
+
+  html += `<div class="section-title" style="margin-top:24px;"><span>Obligaciones pendientes</span><span class="muted">${pendientes.length}</span></div>`;
+  html += pendientes.length ? `<div class="items-list">` + pendientes.map(o => `
+    <div class="card-item fila-obligacion">
+      <div>
+        <div class="card-title">${esc(o.title)}</div>
+        <div class="card-meta">${esc(o.category || "")} · ${o.isRecurring ? "Recurrente" : "Puntual"}${o.isCreditCardSettlement ? " · Resumen tarjeta" : ""}</div>
+      </div>
+      <div class="fila-obligacion-der">
+        <strong>${moneda(o.amount)}</strong>
+        <button class="btn-chico btn-ok" onclick="window.toggleObligation('${o.id}', '${o.status}')">Pagar</button>
+      </div>
+    </div>`).join("") + `</div>`
+    : `<div class="vacio">No hay obligaciones pendientes.</div>`;
+
+  document.getElementById("revisionContenido").innerHTML = html;
 }
+
+// ---------- Eventos de la pantalla (filtros, orden, filas desplegables) ----------
+document.addEventListener("change", (e) => {
+  const sel = e.target.closest("select[data-filtro]");
+  if (sel) { ui[sel.dataset.filtro] = sel.value; renderAll(); return; }
+  if (e.target.id === "prodOrden") {
+    if (e.target.value !== "custom") {
+      const [key, dir] = e.target.value.split(":");
+      sortState.productos = { key, dir };
+    }
+    renderAll();
+  } else if (e.target.id === "prodRepetidos") {
+    renderAll();
+  }
+});
+
+document.addEventListener("input", (e) => {
+  if (["prodSearch", "planillaSearch"].includes(e.target.id)) renderAll();
+});
+
+document.addEventListener("click", (e) => {
+  // Cambiar de sub-pestaña en la Planilla
+  const chip = e.target.closest("#planillaChips .chip");
+  if (chip) { ui.planillaSub = chip.dataset.sub; renderAll(); return; }
+
+  // Ordenar tocando el título de una columna
+  const th = e.target.closest("th[data-sort]");
+  if (th) {
+    const tabla = th.dataset.tabla;
+    const key = th.dataset.sort;
+    const actual = sortState[tabla];
+    if (actual && actual.key === key) sortState[tabla] = { key, dir: actual.dir === "asc" ? "desc" : "asc" };
+    else sortState[tabla] = { key, dir: th.classList.contains("num") ? "desc" : "asc" };
+    renderAll();
+    return;
+  }
+
+  // Abrir o cerrar el detalle de una fila
+  const tr = e.target.closest("tr[data-fila]");
+  if (tr && !e.target.closest("button, a, input, select")) {
+    const clave = tr.dataset.fila;
+    if (filasAbiertas.has(clave)) filasAbiertas.delete(clave); else filasAbiertas.add(clave);
+    renderAll();
+  }
+});
 
 // -------------------------------------------------------------
 // OPERACIONES GLOBALES (ACCESIBLES DESDE BOTONES HTML)
