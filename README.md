@@ -38,7 +38,7 @@ Las pruebas usan datos ficticios y sustituyen Firebase por memoria; no escriben 
 ```sh
 node --check app.js
 node --check sw.js
-node --test tests/tickets.test.mjs tests/carga.test.mjs
+node --test tests/tickets.test.mjs tests/carga.test.mjs tests/publicacion.test.mjs
 ```
 
 La lectura real con Firebase AI Logic y las reglas de la base requieren validación adicional en un entorno autenticado. Los archivos de exportación de Claude, CSV personales y respaldos de Firestore no se deben subir al repositorio público.

@@ -19,7 +19,7 @@ import {
 
 import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken as getAppCheckToken } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app-check.js";
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
-import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs";
+import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs?v=9";
 
 // Configuración del proyecto aprovisionado en Firebase
 const firebaseConfig = {
