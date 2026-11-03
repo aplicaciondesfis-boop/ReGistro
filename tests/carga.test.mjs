@@ -21,6 +21,9 @@ test("la carga manual guarda el ID normalizado y sus productos en el mismo lote"
   assert.equal(app.escrituras.length, 2);
   assert.equal(app.escrituras[0].data.manualArchiveNumber, "142");
   assert.equal(app.escrituras[1].data.purchaseId, app.escrituras[0].ref.id);
+  assert.equal(app.notificados.length, 1);
+  assert.equal(app.notificados[0].id, app.escrituras[0].ref.id);
+  assert.equal(app.notificados[0].items[0].id, app.escrituras[1].ref.id);
   assert.equal(app.ejecutar("actividadActual"), null);
   assert.equal(app.get("btnSaveManualExpense").disabled, false);
 });
@@ -40,6 +43,7 @@ test("un fallo al guardar restaura los controles y conserva el número para rein
   app.prepararManual();
   app.fallar();
   await app.click("btnSaveManualExpense");
+  assert.equal(app.notificados.length, 0);
   assert.equal(app.ejecutar("actividadActual"), null);
   assert.equal(app.get("btnSaveManualExpense").disabled, false);
   assert.equal(app.get("manualArchiveInput").value, "142");

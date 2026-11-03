@@ -10,6 +10,16 @@ test("la página y la caché PWA usan las mismas versiones de los recursos", asy
     ...[...app.matchAll(/from "(\.\/[^"\s]+)"/g)].map(m => m[1])
   ];
   assert.ok(urls.length >= 3);
+  const visited = new Set();
+  for (let index=0; index<urls.length; index++) {
+    const local = new URL(urls[index], raiz); local.search = "";
+    if (!/\.(mjs|js)$/.test(local.pathname) || visited.has(local.href)) continue;
+    visited.add(local.href);
+    const code = await readFile(local,"utf8");
+    for (const match of code.matchAll(/from "(\.\/[^"\s]+)"/g)) {
+      if (!urls.includes(match[1])) urls.push(match[1]);
+    }
+  }
   const activos = [...sw.match(/const ASSETS = \[([\s\S]*?)\];/)[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
   for (const recurso of urls) {
     const url = new URL(recurso, raiz);

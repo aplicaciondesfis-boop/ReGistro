@@ -15,13 +15,15 @@ import {
   serverTimestamp, 
   Timestamp, 
   writeBatch,
-  runTransaction
+  runTransaction,
+  arrayUnion
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
 
 import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken as getAppCheckToken } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app-check.js";
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
-import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs?v=10";
-import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "./productos.mjs?v=10";
+import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs?v=11";
+import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "./productos.mjs?v=11";
+import { iniciarListas } from "./listas.js?v=11";
 
 // Configuración del proyecto aprovisionado en Firebase
 const firebaseConfig = {
@@ -63,6 +65,7 @@ let purchaseItems = [];
 let obligations = [];
 let purchasesReady = false;
 let itemsReady = false;
+let unsubHouseholds = null;
 
 // Categorías oficiales de productos (las mismas que usabas en tus planillas)
 const CATEGORIAS = ["Almacén", "Bebidas", "Carnes", "Frutas y verduras", "Golosinas y snacks", "Higiene personal", "Hogar", "Limpieza", "Lácteos y fiambres", "Panificados y harinas", "Sin detalle"];
@@ -91,9 +94,10 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "productos v10 · 02/11/2026";
+versionTag.textContent = "listas v11 · 03/11/2026";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
+const shopping = iniciarListas({db,getData:()=>({purchases,items:purchaseItems,busy:!!actividadActual}),categorias:CATEGORIAS});
 
 // Una tarea a la vez; las pestañas siguen disponibles mientras la IA trabaja.
 let actividadActual = null;
@@ -139,6 +143,7 @@ function terminarActividad() {
   actividadActual = null;
   actividadEl.hidden = true;
   controlesActividad(false);
+  shopping.procesarPendientes();
 }
 
 function pedirNumeroManual(input) {
@@ -185,6 +190,16 @@ btnAuth.addEventListener("click", () => {
 });
 
 onAuthStateChanged(auth, async (user) => {
+  shopping.cambiarEspacio(null);
+  if (unsubHouseholds) unsubHouseholds();
+  if (unsubPurchases) unsubPurchases();
+  if (unsubItems) unsubItems();
+  if (unsubObligations) unsubObligations();
+  currentHousehold = null;
+  userHouseholds = [];
+  purchases = [];
+  purchaseItems = [];
+  obligations = [];
   purchasesReady = false;
   itemsReady = false;
   currentUser = user;
@@ -206,7 +221,8 @@ onAuthStateChanged(auth, async (user) => {
 // -------------------------------------------------------------
 function initHouseholdListener(uid) {
   const q = query(collection(db, "households"), where("memberUids", "array-contains", uid));
-  onSnapshot(q, async (snapshot) => {
+  if (unsubHouseholds) unsubHouseholds();
+  unsubHouseholds = onSnapshot(q, async (snapshot) => {
     userHouseholds = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     if (userHouseholds.length === 0) {
       // Crear hogar inicial
@@ -272,17 +288,18 @@ function listenData() {
   const isPersonal = activeSpace === "personal";
   const targetHouseholdId = isPersonal ? "personal" : (currentHousehold ? currentHousehold.id : "");
   if (!targetHouseholdId && !isPersonal) return;
+  shopping.cambiarEspacio({kind:isPersonal?"users":"households",id:isPersonal?currentUser.uid:targetHouseholdId,uid:currentUser.uid});
 
   document.getElementById("summarySpaceLabel").textContent = isPersonal ? "RESUMEN PERSONAL" : `RESUMEN DE ${currentHousehold ? currentHousehold.name.toUpperCase() : 'HOGAR'}`;
 
   // 1. Compras
   let qPurchases = isPersonal
-    ? query(collection(db, "purchases"), where("householdId", "==", "personal"), where("createdByUid", "==", currentUser.uid))
+    ? query(collection(db, "purchases"), where("householdId", "==", "personal"), where("memberUids", "array-contains", currentUser.uid))
     : query(collection(db, "purchases"), where("householdId", "==", targetHouseholdId), where("memberUids", "array-contains", currentUser.uid));
 
   unsubPurchases = onSnapshot(qPurchases, { includeMetadataChanges: true }, (snap) => {
     purchasesReady = !snap.metadata.fromCache;
-    purchases = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    purchases = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !isPersonal || p.createdByUid === currentUser.uid);
     purchases.sort((a, b) => {
       const da = a.date ? (a.date.toDate ? a.date.toDate() : new Date(a.date)) : new Date();
       const db = b.date ? (b.date.toDate ? b.date.toDate() : new Date(b.date)) : new Date();
@@ -297,7 +314,7 @@ function listenData() {
 
   // 2. Líneas de compra
   let qItems = isPersonal
-    ? query(collection(db, "purchase_items"), where("householdId", "==", "personal"))
+    ? query(collection(db, "purchase_items"), where("householdId", "==", "personal"), where("memberUids", "array-contains", currentUser.uid))
     : query(collection(db, "purchase_items"), where("householdId", "==", targetHouseholdId), where("memberUids", "array-contains", currentUser.uid));
 
   unsubItems = onSnapshot(qItems, { includeMetadataChanges: true }, (snap) => {
@@ -311,11 +328,11 @@ function listenData() {
 
   // 3. Obligaciones
   let qObligations = isPersonal
-    ? query(collection(db, "obligations"), where("householdId", "==", "personal"), where("createdByUid", "==", currentUser.uid))
+    ? query(collection(db, "obligations"), where("householdId", "==", "personal"), where("memberUids", "array-contains", currentUser.uid))
     : query(collection(db, "obligations"), where("householdId", "==", targetHouseholdId), where("memberUids", "array-contains", currentUser.uid));
 
   unsubObligations = onSnapshot(qObligations, (snap) => {
-    obligations = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    obligations = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => !isPersonal || o.createdByUid === currentUser.uid);
     renderAll();
   });
 }
@@ -584,6 +601,7 @@ function renderAll() {
     renderProductos();
     renderPlanilla();
     renderRevision();
+    shopping.actualizarCatalogo();
   } catch (err) {
     console.error("Error dibujando la pantalla:", err);
   }
@@ -1415,8 +1433,11 @@ async function guardarTicketImportado(t) {
     memberUids: memberUids,
     createdAt: serverTimestamp()
   });
+  const savedItems = [];
   t.items.forEach(item => {
-    batch.set(doc(collection(db, "purchase_items")), {
+    const itemRef = doc(collection(db, "purchase_items"));
+    savedItems.push({id:itemRef.id,...item});
+    batch.set(itemRef, {
       purchaseId: purchaseRef.id,
       householdId: hId,
       rawDescription: item.rawDescription,
@@ -1436,6 +1457,7 @@ async function guardarTicketImportado(t) {
     });
   });
   await batch.commit();
+  shopping.ticketGuardado({id:purchaseRef.id,storeName:t.storeName,date:t.date||new Date(),items:savedItems});
 }
 
 window.importarPlanilla = () => {
@@ -1623,6 +1645,7 @@ document.getElementById("btnSaveManualExpense").addEventListener("click", async 
     batch.set(purchaseRef, purchase);
     batch.set(itemRef, item);
     await batch.commit();
+    shopping.ticketGuardado({id:purchaseRef.id,storeName:store,date:new Date(),items:[{id:itemRef.id,...item}]});
 
     modalManual.style.display = "none";
     document.getElementById("manualAmountInput").value = "";
@@ -2057,8 +2080,10 @@ async function processParsedTicket(parsed) {
     const batch = writeBatch(db);
     batch.set(purchaseRef, purchase);
 
+    const savedItems = [];
     parsed.items.forEach(item => {
       const itemRef = doc(collection(db, "purchase_items"));
+      savedItems.push({id:itemRef.id,...item});
       batch.set(itemRef, {
         purchaseId: purchaseRef.id,
         householdId: hId,
@@ -2080,6 +2105,7 @@ async function processParsedTicket(parsed) {
     });
 
     await batch.commit();
+    shopping.ticketGuardado({id:purchaseRef.id,storeName:parsed.storeName,date:parsed.date||new Date(),items:savedItems});
     document.getElementById("scanArchiveInput").value = "";
     alert(`¡Comprobante de ${parsed.storeName} registrado con éxito!`);
   } catch (err) {
@@ -2131,6 +2157,8 @@ document.getElementById("btnGenerateInvite").addEventListener("click", async () 
 });
 
 document.getElementById("btnJoinHousehold").addEventListener("click", async () => {
+  if (!currentUser) return;
+  try {
   const code = document.getElementById("joinCodeInput").value.trim().toUpperCase();
   if (!code) return;
 
@@ -2146,23 +2174,17 @@ document.getElementById("btnJoinHousehold").addEventListener("click", async () =
   }
 
   const hRef = doc(db, "households", invite.householdId);
-  const hSnap = await getDoc(hRef);
-  if (!hSnap.exists()) {
-    alert("Hogar no encontrado.");
-    return;
-  }
-
-  const hData = hSnap.data();
-  const updatedUids = Array.from(new Set([...(hData.memberUids || []), currentUser.uid]));
-  const updatedMembers = { ...(hData.members || {}), [currentUser.uid]: invite.role };
-
   await updateDoc(hRef, {
-    memberUids: updatedUids,
-    members: updatedMembers
+    memberUids: arrayUnion(currentUser.uid),
+    [`members.${currentUser.uid}`]: invite.role,
+    joinToken: code
   });
 
-  alert(`¡Te uniste con éxito a '${hData.name}'!`);
+  alert(`¡Te uniste con éxito a '${invite.householdName || "tu hogar"}'!`);
   modalSettings.style.display = "none";
+  } catch (err) {
+    alert("No se pudo usar la invitación. Revisá el código y volvé a intentar. " + err.message);
+  }
 });
 
 function escapeHtml(text) {
