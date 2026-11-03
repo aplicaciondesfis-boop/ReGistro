@@ -21,6 +21,14 @@ Un número manual o comprobante ya utilizado bloquea otra copia. Si una foto o c
 
 La prevención actual funciona en el cliente con los registros sincronizados del espacio abierto. Todavía no garantiza exclusividad si dos dispositivos guardan el mismo número al mismo tiempo; esa garantía requiere un mecanismo atómico compatible con las reglas de Firestore. Las reglas y los roles son un trabajo posterior a esta propuesta.
 
+## Corregir un producto
+
+En **Productos**, desplegá un producto y tocá **Corregir** en la compra que corresponda. También está disponible desde el detalle del ticket y en **Planilla → Ítems**.
+
+El formulario permite corregir nombre, marca, categoría, cantidad, contenido y total pagado. Acepta gramos y mililitros y guarda las medidas normalizadas en kg/l. Muestra el precio por kilo, litro o unidad antes de guardar y el efecto del reintegro si existe. Por ejemplo, un paquete de 500 g por $5.000 equivale a $10.000/kg, manteniendo el gasto en $5.000.
+
+La corrección afecta solo a esa compra y conserva los valores anteriores de la última corrección. Si otro dispositivo modifica el producto mientras el formulario está abierto, se pide abrirlo de nuevo para evitar sobrescribirlo. Si se corrige el importe de la línea, el ticket pasa a revisión; su total pagado no cambia automáticamente.
+
 ## Actividad de la IA
 
 Un indicador en la esquina superior derecha muestra la lectura, categorización y guardado. Sigue visible al cerrar el modal o cambiar de pestaña. Durante una tarea se bloquean otras cargas y el cambio de espacio. Un error restaura los controles para reintentar.
@@ -38,7 +46,7 @@ Las pruebas usan datos ficticios y sustituyen Firebase por memoria; no escriben 
 ```sh
 node --check app.js
 node --check sw.js
-node --test tests/tickets.test.mjs tests/carga.test.mjs tests/publicacion.test.mjs
+node --test tests/tickets.test.mjs tests/carga.test.mjs tests/publicacion.test.mjs tests/productos.test.mjs
 ```
 
 La lectura real con Firebase AI Logic y las reglas de la base requieren validación adicional en un entorno autenticado. Los archivos de exportación de Claude, CSV personales y respaldos de Firestore no se deben subir al repositorio público.

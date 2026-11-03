@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0F6E8C">
   <link rel="icon" type="image/png" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=9">
+  <link rel="stylesheet" href="styles.css?v=10">
 </head>
 <body>
 
@@ -232,6 +232,63 @@
     </div>
   </div>
 
+  <!-- MODAL: CORREGIR UN PRODUCTO DE UNA COMPRA -->
+  <div id="modalProductCorrection" class="modal-overlay" style="display:none;">
+    <form id="productCorrectionForm" class="modal-content correction-dialog" role="dialog" aria-modal="true" aria-labelledby="productCorrectionTitle">
+      <h2 id="productCorrectionTitle" class="modal-title">Corregir producto</h2>
+      <div class="correction-body">
+      <p id="productCorrectionContext" class="card-meta"></p>
+      <p id="productCorrectionOriginal" class="card-meta" style="margin:8px 0 16px;"></p>
+      <fieldset id="productCorrectionFields" class="correction-fields">
+        <div class="form-group">
+          <label class="form-label" for="correctionName">Nombre del producto</label>
+          <input id="correctionName" class="form-input" maxlength="160" required>
+        </div>
+        <div class="correction-grid">
+          <div class="form-group">
+            <label class="form-label" for="correctionBrand">Marca (opcional)</label>
+            <input id="correctionBrand" class="form-input" maxlength="100">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="correctionCategory">Categoría</label>
+            <select id="correctionCategory" class="form-select"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="correctionQuantity">Cantidad comprada</label>
+            <input id="correctionQuantity" class="form-input" type="number" min="0.000001" step="any" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="correctionTotal">Total pagado por este producto (ARS)</label>
+            <input id="correctionTotal" class="form-input" type="number" min="0" step="0.01" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="correctionContent">Contenido de una unidad</label>
+            <input id="correctionContent" class="form-input" type="number" min="0.000001" step="any" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="correctionUnit">Unidad del contenido</label>
+            <select id="correctionUnit" class="form-select">
+              <option value="g">Gramos (g)</option>
+              <option value="kg">Kilos (kg)</option>
+              <option value="ml">Mililitros (ml)</option>
+              <option value="l">Litros (l)</option>
+              <option value="unidad">Unidades</option>
+            </select>
+          </div>
+        </div>
+        <p class="card-meta">Ejemplo: para un paquete de 500 g, poné cantidad 1 y contenido 500 gramos. Si compraste por peso, también podés indicar el peso como cantidad y contenido 1 kg.</p>
+      </fieldset>
+      <div id="productCorrectionPreview" class="aviso correction-preview" role="status" aria-live="polite"></div>
+      <p id="productCorrectionError" class="correction-error" role="alert"></p>
+      <p class="card-meta">La corrección se aplica solo a esta compra. Si cambiás el importe, el ticket quedará pendiente de revisión.</p>
+      </div>
+      <div class="modal-actions">
+        <button id="btnCloseProductCorrection" type="button" class="btn-secondary">Cancelar</button>
+        <button id="btnSaveProductCorrection" type="submit" class="btn-primary">Guardar corrección</button>
+      </div>
+    </form>
+  </div>
+
   <!-- MODAL: ADMINISTRAR HOGAR E INVITACIONES -->
   <div id="modalSettings" class="modal-overlay" style="display: none;">
     <div class="modal-content">
@@ -271,7 +328,7 @@
   </div>
 
   <!-- Scripts Firebase SDK Oficial v11 -->
-  <script type="module" src="app.js?v=9"></script>
+  <script type="module" src="app.js?v=10"></script>
 
 </body>
 </html>

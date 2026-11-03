@@ -1,6 +1,7 @@
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 import { numeroManual, buscarDuplicado, gruposPorTotal } from "../tickets.mjs";
+import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "../productos.mjs";
 
 const source = (await readFile(new URL("../app.js", import.meta.url), "utf8")).replace(/^import[\s\S]*?;\r?\n/gm, "");
 
@@ -23,7 +24,7 @@ export function crearApp() {
   }
   function get(id) { if (!elementos.has(id)) elementos.set(id, elemento(id)); return elementos.get(id); }
   const context = vm.createContext({
-    console: { ...console, error() {} }, numeroManual, buscarDuplicado, gruposPorTotal,
+    console: { ...console, error() {} }, numeroManual, buscarDuplicado, gruposPorTotal, calcularCorreccionProducto, camposProducto, precioNormalizadoProducto,
     document: { getElementById: get, createElement: tag => { const el = elemento("creado-" + creados.length); el.tag = tag; creados.push(el); return el; },
       body: elemento("body"), querySelectorAll: () => [], addEventListener() {} },
     navigator: {}, window: {}, alert: msg => avisos.push(msg), confirm: msg => { confirmaciones.push(msg); return respuestas.shift() ?? true; }, prompt: () => null,
@@ -40,7 +41,21 @@ export function crearApp() {
         escrituras.push(...lote);
       } };
     },
-    updateDoc: async (ref, data) => escrituras.push({ ref, data })
+    updateDoc: async (ref, data) => escrituras.push({ ref, data }),
+    runTransaction: async (_db, fn) => {
+      const lote = [];
+      const transaction = {
+        get: async ref => {
+          const lista = ref.collection === "purchase_items" ? "purchaseItems" : "purchases";
+          const registro = vm.runInContext(`${lista}.find(x => x.id === ${JSON.stringify(ref.id)})`, context);
+          return { exists: () => !!registro, data: () => registro };
+        },
+        update: (ref, data) => lote.push({ ref, data })
+      };
+      await fn(transaction);
+      if (fallarEscritura) throw new Error("Fallo de prueba");
+      escrituras.push(...lote);
+    }
   });
   const respuestas = [];
   let fallarEscritura = false;

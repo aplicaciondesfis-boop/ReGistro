@@ -451,6 +451,16 @@ tr.abierta .flecha { transform: rotate(90deg); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
 .empty-state { text-align: center; padding: 40px 20px; color: var(--text-muted); }
+.correction-fields { border: 0; padding: 0; margin: 16px 0; min-width: 0; }
+.correction-dialog { display: flex; flex-direction: column; overflow: hidden; }
+.correction-body { overflow-y: auto; min-height: 0; padding-right: 8px; }
+.correction-dialog .modal-title, .correction-dialog .modal-actions { flex-shrink: 0; }
+.correction-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.correction-preview { display: block; margin-top: 14px; }
+.correction-error { color: #a51d35; margin-top: 10px; font-size: .9rem; }
+.correction-mobile { display: none; }
+@media (max-width: 720px) { .correction-mobile { display: block; margin-top: 6px; } }
+@media (max-width: 480px) { .correction-grid { grid-template-columns: 1fr; } }
 
 /* Permanece visible al cambiar de pestaña o cerrar el modal de lectura. */
 .actividad-flotante {

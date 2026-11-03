@@ -14,12 +14,14 @@ import {
   getDoc,
   serverTimestamp, 
   Timestamp, 
-  writeBatch 
+  writeBatch,
+  runTransaction
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
 
 import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken as getAppCheckToken } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app-check.js";
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
-import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs?v=9";
+import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs?v=10";
+import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "./productos.mjs?v=10";
 
 // Configuración del proyecto aprovisionado en Firebase
 const firebaseConfig = {
@@ -89,7 +91,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "tickets v9 · 02/11/2026";
+versionTag.textContent = "productos v10 · 02/11/2026";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 
@@ -123,7 +125,7 @@ function iniciarActividad(titulo, texto) {
   return true;
 }
 function controlesActividad(ocupado) {
-  for (const id of ["spaceSelector", "btnAuth", "btnOpenScan", "btnOpenManual", "btnSaveManualExpense", "fileReceiptInput", "scanArchiveInput", "manualArchiveInput", "btnSampleDia", "btnSampleChino", "herrImportar", "herrCategorias"]) {
+  for (const id of ["spaceSelector", "btnAuth", "btnOpenScan", "btnOpenManual", "btnSaveManualExpense", "fileReceiptInput", "scanArchiveInput", "manualArchiveInput", "btnSampleDia", "btnSampleChino", "herrImportar", "herrCategorias", "productCorrectionFields", "btnSaveProductCorrection", "btnCloseProductCorrection"]) {
     const el = document.getElementById(id);
     if (el) el.disabled = ocupado;
   }
@@ -520,7 +522,7 @@ function detalleCompra(p) {
   const revisar = p.status === "a_revisar";
   const filas = items.map(i => `
     <tr>
-      <td>${esc(i.rawDescription || i.canonicalProductName)}${i.isDoubtful ? ' <span class="badge-pill warning">dudoso</span>' : ""}<br><button class="btn-chico" onclick="window.editarCategoria('${i.id}')">🏷 ${esc(categoriaDe(i))} ✎</button></td>
+      <td>${esc(i.rawDescription || i.canonicalProductName)}${i.isDoubtful ? ' <span class="badge-pill warning">dudoso</span>' : ""}<br><button class="btn-chico" onclick="window.editarCategoria('${i.id}')">🏷 ${esc(categoriaDe(i))} ✎</button> <button class="btn-chico" onclick="window.editarProducto('${i.id}')">✎ Corregir producto</button></td>
       <td class="num">${numEs(i.quantity || 1, 3)}</td>
       <td class="num hide-sm">${moneda(i.unitPrice)}</td>
       <td class="num hide-sm">${i.discount > 0 ? "-" + moneda(i.discount) : "—"}</td>
@@ -677,11 +679,11 @@ function agruparProductos() {
 
   return Object.keys(grupos).map(k => {
     const items = grupos[k];
-    const precios = items.map(i => (i.unitPriceNormalized || i.unitPrice || 0) * factorReintegro(i.purchaseId)).filter(x => x > 0);
     const tiendas = [...new Set(items.map(i => compraDe[i.purchaseId] && compraDe[i.purchaseId].storeName).filter(Boolean))];
     const cuentaUnidad = {};
     items.forEach(i => { const u = i.presentationUnit || "unidad"; cuentaUnidad[u] = (cuentaUnidad[u] || 0) + 1; });
     const unidad = Object.entries(cuentaUnidad).sort((a, b) => b[1] - a[1])[0][0];
+    const precios = items.filter(i => (i.presentationUnit || "unidad") === unidad).map(i => precioNormalizadoProducto(i) * factorReintegro(i.purchaseId)).filter(x => x > 0);
     return {
       id: k,
       nombre: items[0].canonicalProductName,
@@ -696,8 +698,8 @@ function agruparProductos() {
 }
 
 function detalleProducto(g) {
-  const precioReal = (i) => (i.unitPriceNormalized || i.unitPrice || 0) * factorReintegro(i.purchaseId);
-  const conPrecio = g.items.filter(i => precioReal(i) > 0);
+  const precioReal = (i) => precioNormalizadoProducto(i) * factorReintegro(i.purchaseId);
+  const conPrecio = g.items.filter(i => precioReal(i) > 0 && (i.presentationUnit || "unidad") === g.unidad);
   const mejor = conPrecio.length ? Math.min(...conPrecio.map(precioReal)) : null;
   const ordenados = [...g.items].sort((a, b) => ((aFecha((g.compraDe[b.purchaseId] || {}).date) || 0) - (aFecha((g.compraDe[a.purchaseId] || {}).date) || 0)));
   const filas = ordenados.map(i => {
@@ -705,21 +707,22 @@ function detalleProducto(g) {
     const pr = precioReal(i);
     const f = factorReintegro(i.purchaseId);
     const pagado = f < 1 ? `${moneda(i.lineTotal)} <span class="suave">→ ${moneda(i.lineTotal * f)}</span>` : moneda(i.lineTotal);
-    return `<tr class="${mejor !== null && pr === mejor ? "mejor" : ""}">
-      <td>${fechaCorta(aFecha(p.date))}</td>
+    return `<tr class="${mejor !== null && pr === mejor && (i.presentationUnit || "unidad") === g.unidad ? "mejor" : ""}">
+      <td>${fechaCorta(aFecha(p.date))}<div class="correction-mobile"><button class="btn-chico" onclick="window.editarProducto('${i.id}')">✎ Corregir</button></div></td>
       <td>${esc(p.storeName || "—")}</td>
       <td class="hide-sm">${esc(i.brand || i.rawDescription || "—")}</td>
       <td class="hide-sm">${i.presentationValue ? numEs(i.presentationValue, 3) + " " + esc(i.presentationUnit || "") : "—"}</td>
       <td class="num">${numEs(i.quantity || 1, 3)}</td>
       <td class="num hide-sm">${pagado}</td>
-      <td class="num"><strong>${moneda(pr)}</strong> <span class="suave">${unidadCorta(g.unidad)}</span></td>
+      <td class="num"><strong>${moneda(pr)}</strong> <span class="suave">${unidadCorta(i.presentationUnit || "unidad")}</span></td>
+      <td class="hide-sm"><button class="btn-chico" onclick="window.editarProducto('${i.id}')">✎ Corregir</button></td>
     </tr>`;
   }).join("");
   return `<div class="detalle-meta" style="margin-bottom:8px;"><span>Gasto total: <strong>${moneda(g.gasto)}</strong></span><span>Rango: ${moneda(g.min)} – ${moneda(g.max)} <span class="suave">${unidadCorta(g.unidad)}</span></span></div>
     <div class="tabla-wrap"><table class="tabla mini"><thead><tr>
-      <th>Fecha</th><th>Tienda</th><th class="hide-sm">Marca / detalle</th><th class="hide-sm">Presentación</th><th class="num">Cant.</th><th class="num hide-sm">Pagado</th><th class="num">Precio ${unidadCorta(g.unidad)}</th>
+      <th>Fecha</th><th>Tienda</th><th class="hide-sm">Marca / detalle</th><th class="hide-sm">Presentación</th><th class="num">Cant.</th><th class="num hide-sm">Pagado</th><th class="num">Precio kg/l/u</th><th class="hide-sm">Corregir</th>
     </tr></thead><tbody>${filas}</tbody></table></div>
-    <div class="suave" style="margin-top:6px;">En verde: el precio más barato. Si el ticket tuvo reintegro, el precio ya lo descuenta.</div>`;
+    <div class="suave" style="margin-top:6px;">En verde: el precio más barato. Si el ticket tuvo reintegro, el precio ya lo descuenta.${g.items.some(i => (i.presentationUnit || "unidad") !== g.unidad) ? " Hay unidades diferentes: el promedio compara solo las filas con la misma unidad; corregí las otras para incluirlas." : ""}</div>`;
 }
 
 function renderProductos() {
@@ -787,7 +790,8 @@ function renderPlanilla() {
       { key: "unitPrice", label: "Precio", num: true, cls: "hide-sm", valor: r => r.unitPrice || 0, render: r => moneda(r.unitPrice) },
       { key: "discount", label: "Desc.", num: true, cls: "hide-sm", valor: r => r.discount || 0, render: r => r.discount > 0 ? "-" + moneda(r.discount) : "—" },
       { key: "lineTotal", label: "Total", num: true, valor: r => r.lineTotal || 0, render: r => moneda(r.lineTotal) },
-      { key: "norm", label: "Precio kg/l/u", num: true, cls: "hide-sm", valor: r => r.unitPriceNormalized || 0, render: r => `${moneda(r.unitPriceNormalized)} <span class="suave">${unidadCorta(r.presentationUnit)}</span>` }
+      { key: "norm", label: "Precio kg/l/u", num: true, cls: "hide-sm", valor: precioNormalizadoProducto, render: r => `${moneda(precioNormalizadoProducto(r))} <span class="suave">${unidadCorta(r.presentationUnit)}</span>` },
+      { key: "corregir", label: "Corregir", render: r => `<button class="btn-chico" onclick="window.editarProducto('${r.id}')">✎ Corregir</button>` }
     ];
     html = tablaHtml("planilla-items", cols, filas, { orden: { key: "fecha", dir: "desc" }, vacio: "No hay productos con estos filtros." });
   } else if (sub === "comercios") {
@@ -1050,6 +1054,120 @@ window.toggleObligation = async (id, currentStatus) => {
     paidAt: newStatus === "pagado" ? serverTimestamp() : null
   });
 };
+
+// -------------------------------------------------------------
+// CORREGIR LOS DATOS DE UN PRODUCTO EN UNA COMPRA
+// -------------------------------------------------------------
+let edicionProducto = null;
+const modalProducto = document.getElementById("modalProductCorrection");
+const errorProducto = document.getElementById("productCorrectionError");
+
+function datosFormularioProducto() {
+  const valor = id => document.getElementById(id).value;
+  return calcularCorreccionProducto({
+    canonicalProductName: valor("correctionName"), brand: valor("correctionBrand"), category: valor("correctionCategory"),
+    quantity: valor("correctionQuantity"), lineTotal: valor("correctionTotal"),
+    presentationValue: valor("correctionContent"), presentationUnit: valor("correctionUnit"),
+    discount: edicionProducto?.original.discount ?? 0
+  });
+}
+
+function actualizarPreviewProducto() {
+  const preview = document.getElementById("productCorrectionPreview");
+  const guardar = document.getElementById("btnSaveProductCorrection");
+  try {
+    const datos = datosFormularioProducto();
+    const factor = factorReintegro(edicionProducto?.purchaseId);
+    preview.textContent = `${moneda(datos.lineTotal)} ÷ (${numEs(datos.quantity, 6)} × ${numEs(datos.presentationValue, 6)} ${datos.presentationUnit}) = ${moneda(datos.unitPriceNormalized)} ${unidadCorta(datos.presentationUnit)}` +
+      (factor < 1 ? ` · Con reintegro: ${moneda(datos.unitPriceNormalized * factor)} ${unidadCorta(datos.presentationUnit)}` : "");
+    errorProducto.textContent = "";
+    guardar.disabled = !!actividadActual;
+  } catch (err) {
+    preview.textContent = "Completá los datos para ver el precio por kilo, litro o unidad.";
+    errorProducto.textContent = err.message;
+    guardar.disabled = true;
+  }
+}
+
+window.editarProducto = (id) => {
+  if (actividadActual || !datosListos()) return;
+  if (!itemsReady) { alert("Esperá a que se carguen los productos."); return; }
+  const item = purchaseItems.find(i => i.id === id);
+  const compra = item && purchases.find(p => p.id === item.purchaseId);
+  if (!item || !compra) return;
+  edicionProducto = { id, purchaseId: item.purchaseId, espacio: activeSpace, uid: currentUser.uid, original: camposProducto(item) };
+  document.getElementById("productCorrectionContext").textContent = resumenCompra(compra);
+  document.getElementById("productCorrectionOriginal").textContent = "Texto del ticket: " + (item.rawDescription || "Sin detalle");
+  const asignar = (id, valor) => { document.getElementById(id).value = valor; };
+  asignar("correctionName", item.canonicalProductName || item.rawDescription || "");
+  asignar("correctionBrand", item.brand || "");
+  const categorias = [...new Set([...CATEGORIAS, categoriaDe(item)])];
+  document.getElementById("correctionCategory").innerHTML = categorias.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  asignar("correctionCategory", categoriaDe(item));
+  asignar("correctionQuantity", item.quantity > 0 ? item.quantity : 1);
+  asignar("correctionTotal", item.lineTotal ?? 0);
+  asignar("correctionContent", item.presentationValue > 0 ? item.presentationValue : 1);
+  asignar("correctionUnit", ["kg", "l", "unidad"].includes(item.presentationUnit) ? item.presentationUnit : "unidad");
+  actualizarPreviewProducto();
+  modalProducto.style.display = "flex";
+}
+
+document.getElementById("productCorrectionForm").addEventListener("input", actualizarPreviewProducto);
+document.getElementById("btnCloseProductCorrection").addEventListener("click", () => {
+  if (actividadActual) return;
+  modalProducto.style.display = "none";
+  edicionProducto = null;
+});
+document.getElementById("productCorrectionForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (actividadActual || !edicionProducto || !datosListos()) return;
+  const edicion = edicionProducto;
+  if (edicion.uid !== currentUser.uid || edicion.espacio !== activeSpace || !purchases.some(p => p.id === edicion.purchaseId)) {
+    errorProducto.textContent = "Cambió la sesión o el espacio. Cerrá esta ventana y volvé a abrir el producto.";
+    return;
+  }
+  let datos;
+  try { datos = datosFormularioProducto(); }
+  catch (err) { errorProducto.textContent = err.message; return; }
+  if (!iniciarActividad("Guardando corrección", datos.canonicalProductName)) return;
+  try {
+    const itemRef = doc(db, "purchase_items", edicion.id);
+    const compraRef = doc(db, "purchases", edicion.purchaseId);
+    await runTransaction(db, async transaction => {
+      const itemSnap = await transaction.get(itemRef);
+      const compraSnap = await transaction.get(compraRef);
+      verificarContextoActividad();
+      if (!itemSnap.exists() || !compraSnap.exists()) throw new Error("El producto o su ticket ya no existe. Cerrá la ventana y revisá la lista.");
+      const actual = itemSnap.data(), compra = compraSnap.data();
+      if (actual.purchaseId !== edicion.purchaseId || JSON.stringify(camposProducto(actual)) !== JSON.stringify(edicion.original)) {
+        throw new Error("Este producto cambió mientras lo estabas corrigiendo. Cerrá la ventana y abrilo de nuevo para ver los datos actuales.");
+      }
+      const hogarEsperado = activeSpace === "personal" ? "personal" : currentHousehold?.id;
+      if (actual.householdId !== hogarEsperado || compra.householdId !== hogarEsperado ||
+          (hogarEsperado === "personal" && compra.createdByUid !== currentUser.uid)) {
+        throw new Error("El producto no pertenece al espacio que estás usando.");
+      }
+      transaction.update(itemRef, {
+        ...datos, manuallyCorrected: true, lastModifiedByUid: currentUser.uid, updatedAt: serverTimestamp(),
+        lastManualCorrection: { before: camposProducto(actual), byUid: currentUser.uid, at: serverTimestamp() }
+      });
+      const cambioImporte = Math.round(datos.lineTotal * 100) !== Math.round(Number(actual.lineTotal || 0) * 100);
+      const cabecera = { lastModifiedByUid: currentUser.uid, updatedAt: serverTimestamp() };
+      if (cambioImporte) {
+        cabecera.status = "a_revisar";
+        cabecera.reviewNotes = [...(compra.reviewNotes || []), `Se corrigió el importe de «${datos.canonicalProductName}»: ${moneda(actual.lineTotal)} → ${moneda(datos.lineTotal)}. Revisá la suma de productos y el total del ticket.`];
+      }
+      transaction.update(compraRef, cabecera);
+    });
+    modalProducto.style.display = "none";
+    edicionProducto = null;
+  } catch (err) {
+    console.error("Error guardando corrección:", err);
+    errorProducto.textContent = "No se pudo guardar. " + err.message;
+  } finally {
+    terminarActividad();
+  }
+});
 
 // -------------------------------------------------------------
 // CATEGORÍAS: corregir a mano y completar las que faltan con IA
