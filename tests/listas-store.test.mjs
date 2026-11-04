@@ -52,3 +52,9 @@ test("las mismas necesidades personales se guardan separadas por propietario y d
 test("no se puede modificar la membresía de una lista finalizada desde el formulario",async()=>{
   const m=memoria(),l=await m.repo.crearLista("A");await m.repo.archivar(l,[]);await assert.rejects(m.repo.guardarNecesidad({name:"Papa",listIds:[l]}));assert.equal(m.records("shopping_needs").length,0);
 });
+
+test("ordenar los pendientes salta los productos comprados y conserva sus referencias",async()=>{
+  const m=memoria(),l=await m.repo.crearLista("Mensual"),a=await m.repo.guardarNecesidad({name:"Arroz",listIds:[l]}),b=await m.repo.guardarNecesidad({name:"Pan",listIds:[l]}),c=await m.repo.guardarNecesidad({name:"Leche",listIds:[l]});
+  await m.repo.completar(b.id,true);await m.repo.mover(l,c.id,-1,[a.id,c.id]);
+  assert.deepEqual(m.records("shopping_lists")[0].needIds,[c.id,b.id,a.id]);assert.equal(m.records("shopping_needs").find(n=>n.id===b.id).done,true);
+});
