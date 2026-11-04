@@ -45,6 +45,12 @@ Los datos se guardan en `households/{id}/shopping_*` para el hogar y `users/{uid
 
 `firestore.rules` incluye acceso por miembro del hogar o propietario del espacio personal y validación de los nuevos documentos. El ingreso de un miembro nuevo requiere una invitación válida; se impide enumerar invitaciones. Los roles de edición del resto del sistema siguen siendo un trabajo posterior. GitHub Pages publica los archivos de la app; las reglas se publican por separado en la base con ID configurado en app.js.
 
+## Tarjetas y entrada rápida de productos
+
+La lista de compras se organiza en tarjetas de color: Productos a comprar reúne los pendientes sueltos y cada lista tiene su propia tarjeta. Los controles + / − expanden o contraen la vista sin perder el borrador. Dentro de cada tarjeta se pueden tildar los productos, agregar más y abrir los detalles y precios.
+
+La entrada rápida guarda cada renglón al pulsar Enter o Shift+Enter y permite seguir escribiendo sin cerrar el formulario. Para pegar varios productos o guardar el último renglón, usar Agregar lo escrito. Los envíos se procesan en orden; si falla alguno, se conservan los renglones sin guardar para reintentar. Cambiar de espacio cancela los envíos aún no iniciados y evita mezclarlos con el nuevo hogar. Las cantidades, marcas y notas siguen disponibles en Detalles.
+
 ## Actividad de la IA
 
 Un indicador en la esquina superior derecha muestra la lectura, categorización y guardado. Sigue visible al cerrar el modal o cambiar de pestaña. Durante una tarea se bloquean otras cargas y el cambio de espacio. Un error restaura los controles para reintentar.
@@ -62,7 +68,7 @@ Las pruebas usan datos ficticios y sustituyen Firebase por memoria; no escriben 
 ```sh
 node --check app.js
 node --check sw.js
-node --test tests/tickets.test.mjs tests/carga.test.mjs tests/publicacion.test.mjs tests/productos.test.mjs tests/compras.test.mjs tests/listas-store.test.mjs
+node --test tests/tickets.test.mjs tests/carga.test.mjs tests/publicacion.test.mjs tests/productos.test.mjs tests/compras.test.mjs tests/listas-store.test.mjs tests/listas-entrada.test.mjs
 ```
 
 El reconocimiento real con Firebase AI Logic se valida con tickets reales. Las reglas se comprobaron también en el simulador de Firebase (sin sesión, propietario y usuario ajeno); las operaciones autenticadas se revisan tras publicar. Los archivos de exportación de Claude, CSV personales y respaldos de Firestore no se deben subir al repositorio público.

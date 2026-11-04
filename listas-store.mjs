@@ -1,4 +1,4 @@
-import {validarNecesidad,claveNecesidad,aplicarCompra,cotizar} from "./compras.mjs?v=11";
+import {validarNecesidad,claveNecesidad,aplicarCompra,cotizar} from "./compras.mjs?v=12";
 
 export function crearRepositorioListas(db,api,scope) {
   const base=[scope.kind,scope.id], meta=()=>({updatedAt:api.serverTimestamp(),lastModifiedByUid:scope.uid});
@@ -52,7 +52,7 @@ export function crearRepositorioListas(db,api,scope) {
   async function renombrar(id,name){await api.updateDoc(ref("shopping_lists",id),{name:nombreLista(name),...meta()});}
 
   async function mover(listId,id,delta,ordered) {
-    if(listId){return api.runTransaction(db,async tx=>{const r=ref("shopping_lists",listId),l=dato(await tx.get(r));if(l?.status!=="active")throw Error("La lista ya está finalizada.");const ids=[...(l.needIds||[])],a=ids.indexOf(id),b=a+delta;if(a<0||b<0||b>=ids.length)return;[ids[a],ids[b]]=[ids[b],ids[a]];tx.update(r,{needIds:ids,...meta()});});}
+    if(listId){return api.runTransaction(db,async tx=>{const r=ref("shopping_lists",listId),l=dato(await tx.get(r));if(l?.status!=="active")throw Error("La lista ya está finalizada.");const ids=[...(l.needIds||[])],visible=ordered.filter(x=>ids.includes(x)),index=visible.indexOf(id),other=visible[index+delta],a=ids.indexOf(id),b=ids.indexOf(other);if(index<0||a<0||b<0)return;[ids[a],ids[b]]=[ids[b],ids[a]];tx.update(r,{needIds:ids,...meta()});});}
     const index=ordered.indexOf(id),other=ordered[index+delta];if(!other)return;
     await api.runTransaction(db,async tx=>{const a=ref("shopping_needs",id),b=ref("shopping_needs",other),aa=dato(await tx.get(a)),bb=dato(await tx.get(b));if(!aa||!bb)return;tx.update(a,{order:bb.order,...meta()});tx.update(b,{order:aa.order,...meta()});});
   }
