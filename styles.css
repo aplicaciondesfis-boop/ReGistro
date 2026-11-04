@@ -500,6 +500,11 @@ tr.abierta .flecha { transform: rotate(90deg); }
 .shopping-note .shopping-tag { display:none; }
 .shopping-note .shopping-row-actions { padding-left:30px;gap:5px; }
 .shopping-note .btn-chico { font-size:.7rem;padding:4px 8px; }
+.shopping-note .shopping-item-compact { grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:center;padding:7px 0;border:0; }
+.shopping-note .shopping-item-compact .shopping-check { min-width:0;margin:0;padding:5px 0;align-items:center; }
+.shopping-note .shopping-item-compact .btn-chico { padding:7px 10px;white-space:nowrap;font-size:.75rem; }
+.shopping-note.is-expanded .shopping-note-products { border-top:1px solid var(--note-border);margin-top:14px; }
+.shopping-detail-price { font-size:.85rem;line-height:1.6; }
 .shopping-composer { margin-top:14px; }
 .shopping-composer .form-label { font-size:.78rem;font-weight:600; }
 .shopping-quick-entry { min-height:76px;resize:vertical;line-height:1.65;background:rgba(255,255,255,.8);font-size:1rem; }

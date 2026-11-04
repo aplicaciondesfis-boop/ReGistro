@@ -33,8 +33,9 @@ export function iniciarListas({db,getData,categorias}) {
   function rows(ns,listId="",history=false,compact=false) {
     const list=lists.find(l=>l.id===listId),items=ordered(ns,list);
     if(!items.length)return '<div class="vacio">Todavía no hay productos.</div>';
-    const quote=cotizar(items,catalog);
+    const quote=compact?null:cotizar(items,catalog);
     return `<ul class="shopping-items">${items.map((n,index)=>{
+      if(compact)return `<li class="shopping-item shopping-item-compact"><label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}"><span>${esc(n.name)}</span></label>${action("edit-need","Detalles",n.id)}</li>`;
       const line=quote.lines.find(l=>l.need.id===n.id),best=line?.best;
       const names=(n.listIds||[]).map(id=>activeLists().find(l=>l.id===id)?.name).filter(Boolean);
       return `<li class="shopping-item ${n.done?"shopping-done":""}">
@@ -113,7 +114,9 @@ export function iniciarListas({db,getData,categorias}) {
   function commitEditor(key,all=false){if(!usable()||busy){entrada.state(key).error="Esperá a que termine el guardado y se sincronicen las listas.";render();return;}return entrada.commit(key,{all,options:optionsFor(key)});}
   function needForm(id=null,listId="",initialName="",initialLists=null){
     const n=needs.find(x=>x.id===id)||{name:initialName},selected=n.listIds||initialLists||[listId].filter(Boolean),names=[...new Set(catalog.map(p=>p.name))].sort();
-    open("need",`<h2>${id?"Editar faltante":"Anotar producto"}</h2><form data-shopping-form="need" data-id="${esc(id||"")}">
+    const reference=id?cotizar([n],catalog).lines[0]:null,best=reference?.best;
+    const priceInfo=id?`<p class="aviso shopping-detail-price">${best?`Último precio de referencia: <strong>${money(best.price)}/${esc(reference.unit)}</strong><br>${esc(best.store)} · ${date(best.date)}`:"Sin precio comparable registrado"}</p>`:"";
+    open("need",`<h2>${id?"Editar faltante":"Anotar producto"}</h2>${priceInfo}<form data-shopping-form="need" data-id="${esc(id||"")}">
       <label class="form-label">Producto<input name="name" class="form-input" required maxlength="120" list="shoppingProducts" value="${esc(n.name||"")}" placeholder="Ej: queso cremoso"></label><datalist id="shoppingProducts">${names.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist>
       <details ${n.quantity!=null||n.note||n.brand?"open":""}><summary>Agregar detalles</summary><div class="correction-grid">
         <label class="form-label">Cantidad prevista (opcional)<input name="quantity" type="number" step="any" min="0.000001" class="form-input" value="${n.quantity??""}"></label>
