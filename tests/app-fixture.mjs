@@ -2,6 +2,7 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 import { numeroManual, buscarDuplicado, gruposPorTotal } from "../tickets.mjs";
 import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "../productos.mjs";
+import { guardarPreferencias, leerPreferencias, periodosMensuales } from "../preferencias.mjs";
 
 const source = (await readFile(new URL("../app.js", import.meta.url), "utf8")).replace(/^import[\s\S]*?;\r?\n/gm, "");
 
@@ -18,6 +19,7 @@ export function crearApp() {
   const espacios = [];
   const documentos = new Map();
   const almacenamiento = new Map();
+  const storage = { getItem: key => almacenamiento.get(key) ?? null, setItem: (key, value) => almacenamiento.set(key, value) };
   let cambioSesion;
   let contador = 0;
   function elemento(id = "") {
@@ -31,10 +33,12 @@ export function crearApp() {
   function get(id) { if (!elementos.has(id)) elementos.set(id, elemento(id)); return elementos.get(id); }
   const context = vm.createContext({
     console: { ...console, error() {} }, numeroManual, buscarDuplicado, gruposPorTotal, calcularCorreccionProducto, camposProducto, precioNormalizadoProducto,
+    guardarPreferencias: (tipo, scope, value) => guardarPreferencias(tipo, scope, value, storage),
+    leerPreferencias: (tipo, scope) => leerPreferencias(tipo, scope, storage), periodosMensuales,
     iniciarListas: () => ({cambiarEspacio(scope){espacios.push(scope);},actualizarCatalogo(){},ticketGuardado(ticket){notificados.push(ticket);},procesarPendientes(){}}),
     document: { getElementById: get, createElement: tag => { const el = elemento("creado-" + creados.length); el.tag = tag; creados.push(el); return el; },
       body: elemento("body"), querySelectorAll: () => [], addEventListener() {} },
-    navigator: {}, window: { localStorage: { getItem: key => almacenamiento.get(key) ?? null, setItem: (key, value) => almacenamiento.set(key, value) } }, alert: msg => avisos.push(msg), confirm: msg => { confirmaciones.push(msg); return respuestas.shift() ?? true; }, prompt: () => null,
+    navigator: {}, window: { localStorage: storage }, alert: msg => avisos.push(msg), confirm: msg => { confirmaciones.push(msg); return respuestas.shift() ?? true; }, prompt: () => null,
     setInterval() {}, setTimeout, clearTimeout,
     initializeApp: () => ({}), initializeAppCheck: () => ({}), ReCaptchaEnterpriseProvider: class {},
     getAuth: () => ({}), getFirestore: () => ({}), onAuthStateChanged(_auth, fn) { cambioSesion = fn; },

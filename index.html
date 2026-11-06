@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0F6E8C">
   <link rel="icon" type="image/png" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=13">
+  <link rel="stylesheet" href="styles.css?v=16">
 </head>
 <body>
 
@@ -79,7 +79,23 @@
 
       <!-- PESTAÑA 1: RESUMEN -->
       <section id="tab-resumen" class="tab-section">
+        <div class="resumen-vistas">
+          <button id="btnCompararMeses" type="button" class="chip" aria-pressed="false">Este mes vs. el anterior</button>
+          <div id="resumenVistasGuardadas" class="resumen-vistas"></div>
+        </div>
+        <details id="resumenPersonalizar" class="resumen-preferencias">
+          <summary>Personalizar resumen</summary>
+          <p class="card-meta">Tus preferencias se guardan en este navegador, por cuenta y por hogar.</p>
+          <div id="resumenOrdenGraficos"></div>
+          <form id="resumenGuardarVista" class="barra-herramientas">
+            <input id="resumenNombreVista" class="form-input" aria-label="Nombre de la vista" placeholder="Nombre de la vista" required maxlength="48">
+            <button type="submit" class="btn-secondary">Guardar vista actual</button>
+          </form>
+          <div id="resumenGestionVistas"></div>
+          <p id="resumenVistasEstado" class="card-meta" role="status"></p>
+        </details>
         <div id="filtros-resumen" class="filtros"></div>
+        <div id="resumenComparacion" hidden></div>
         <div id="resumenKpis" class="kpis"></div>
         <div id="resumenGraficos" class="graficos"></div>
         <div class="section-title"><span>Compras</span><span id="resumenCount" class="muted"></span></div>
@@ -351,7 +367,22 @@
       <div id="shoppingModalBody" class="shopping-modal-body"></div>
     </div>
   </div>
-  <script type="module" src="app.js?v=15"></script>
+  <dialog id="shoppingDuplicate" class="modal-content shopping-duplicate" aria-labelledby="shoppingDuplicateTitle">
+    <h2 id="shoppingDuplicateTitle">Posible duplicado</h2>
+    <p id="shoppingDuplicateName"></p>
+    <form method="dialog">
+      <label class="form-label" for="shoppingDuplicateExisting">Pendiente existente</label>
+      <select id="shoppingDuplicateExisting" class="form-select"></select>
+      <p class="card-meta">Si usás el pendiente existente, conserva sus detalles y se agrega a las listas elegidas.</p>
+      <div class="modal-actions">
+        <button class="btn-secondary" value="skip" autofocus>Omitir</button>
+        <button class="btn-secondary" value="new">Agregar igual</button>
+        <button class="btn-primary" value="existing">Usar existente</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js?v=16"></script>
 
 </body>
 </html>

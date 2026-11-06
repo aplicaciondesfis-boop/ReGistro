@@ -1,6 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {separarProductos,crearEntradaRapida} from "../listas-entrada.mjs";
+import {separarProductos,crearEntradaRapida,posiblesDuplicados} from "../listas-entrada.mjs";
+
+test("avisa sobre un nombre genérico y conserva variantes y marcas distintas",()=>{
+  const needs=[{name:"Aceite de girasol",brand:"Marca A"},{name:"Aceite de oliva",brand:"Marca B"},{name:"Aceite de maíz",done:true},{name:"Aceite de coco",cancelled:true}];
+  assert.deepEqual(posiblesDuplicados({name:"ACEÍTES"},needs),needs.slice(0,2));
+  assert.deepEqual(posiblesDuplicados({name:"Aceite",brand:"Marca B"},needs),[needs[1]]);
+  assert.deepEqual(posiblesDuplicados({name:"Aceite de oliva",brand:"Marca B"},needs),[]);
+  assert.deepEqual(posiblesDuplicados({name:"Aceite de lino"},needs),[]);
+});
+
+test("omitir una sugerencia conserva el resto del pegado y cuenta solo lo guardado",async()=>{
+  const scope={},saved=[];
+  const entrada=crearEntradaRapida({getScope:()=>scope,guardar:name=>name==="Aceite"?false:saved.push(name)});
+  entrada.setText("a","Aceite\nPan\nLeche");
+  assert.equal(await entrada.commit("a"),true);
+  assert.deepEqual(saved,["Pan"]);
+  assert.equal(entrada.state("a").saved,1);
+  assert.equal(entrada.state("a").text,"Leche");
+  assert.equal(entrada.isSaving(),false);
+});
 
 test("separar renglones conserva el último borrador y limpia listas pegadas sin duplicarlas",()=>{
   assert.deepEqual(separarProductos("• Leche\r\n- Pan\n1. LECHÉ\nHue"),{names:["Leche","Pan"],rest:"Hue"});
