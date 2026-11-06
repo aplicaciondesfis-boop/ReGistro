@@ -23,13 +23,50 @@ service cloud.firestore {
     function validJoin(householdId) {
       let invite = get(/databases/$(database)/documents/invitations/$(request.resource.data.joinToken)).data;
       return invite.householdId == householdId && invite.isRevoked == false &&
+        invite.createdByUid == resource.data.adminUid &&
         invite.role in ['editor', 'colaborador', 'lector'] &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'members', 'joinToken']) &&
         request.resource.data.memberUids.hasAll(resource.data.memberUids) &&
         request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1 &&
         request.auth.uid in request.resource.data.memberUids &&
-        request.resource.data.members.diff(resource.data.members).affectedKeys().hasOnly([request.auth.uid]) &&
+        request.resource.data.members.diff(resource.data.get('members', {})).affectedKeys().hasOnly([request.auth.uid]) &&
         request.resource.data.members[request.auth.uid] == invite.role;
+    }
+
+    function validHouseholdName(name) {
+      return name is string && name.size() <= 60 && name.matches('.*[^[:space:]].*');
+    }
+
+    function householdAdmin(householdId) {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/households/$(householdId)).data.adminUid == request.auth.uid;
+    }
+
+    function canReadFinance(data) {
+      return isAuthenticated() && (
+        (data.householdId == 'personal' && isMember(data.memberUids)) ||
+        (data.householdId != 'personal' && householdMember(data.householdId))
+      );
+    }
+
+    function canWriteSharedFinance(data) {
+      let household = get(/databases/$(database)/documents/households/$(data.householdId)).data;
+      return request.auth.uid in household.memberUids && (
+        request.auth.uid == household.adminUid ||
+        household.get('members', {}).get(request.auth.uid, '') == 'editor' ||
+        isMember(data.get('memberUids', []))
+      );
+    }
+
+    function canWriteFinance(data) {
+      return isAuthenticated() && (data.householdId == 'personal'
+        ? isMember(data.memberUids) : canWriteSharedFinance(data));
+    }
+
+    function sameFinanceScope() {
+      return request.resource.data.householdId == resource.data.householdId &&
+        request.resource.data.get('memberUids', []) == resource.data.get('memberUids', []) &&
+        request.resource.data.get('createdByUid', null) == resource.data.get('createdByUid', null);
     }
 
     function shoppingCollection(type) {
@@ -56,11 +93,15 @@ service cloud.firestore {
     // Households
     match /households/{householdId} {
       allow read: if isMember(resource.data.memberUids);
-      allow create: if isAuthenticated() &&
+      allow create: if isAuthenticated() && householdId != 'personal' &&
                     request.resource.data.adminUid == request.auth.uid &&
-                    (request.auth.uid in request.resource.data.memberUids);
+                    request.resource.data.memberUids == [request.auth.uid] &&
+                    validHouseholdName(request.resource.data.name);
       allow update: if isAuthenticated() &&
-        ((request.auth.uid in resource.data.memberUids) || validJoin(householdId));
+        ((isOwner(resource.data.adminUid) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
+          validHouseholdName(request.resource.data.name)) ||
+         (!isMember(resource.data.memberUids) && validJoin(householdId)));
       allow delete: if isOwner(resource.data.adminUid);
     }
 
@@ -84,31 +125,28 @@ service cloud.firestore {
 
     // Purchases
     match /purchases/{purchaseId} {
-      allow read: if isMember(resource.data.memberUids);
-      allow create: if isAuthenticated() &&
-                    (request.auth.uid in request.resource.data.memberUids) &&
+      allow read: if canReadFinance(resource.data);
+      allow create: if canWriteFinance(request.resource.data) &&
                     request.resource.data.createdByUid == request.auth.uid;
-      allow update: if isMember(resource.data.memberUids);
-      allow delete: if isMember(resource.data.memberUids);
+      allow update: if canWriteFinance(resource.data) && sameFinanceScope();
+      allow delete: if canWriteFinance(resource.data);
     }
 
     // Purchase Line Items
     match /purchase_items/{itemId} {
-      allow read: if isMember(resource.data.memberUids);
-      allow create: if isAuthenticated() &&
-                    (request.auth.uid in request.resource.data.memberUids);
-      allow update: if isMember(resource.data.memberUids);
-      allow delete: if isMember(resource.data.memberUids);
+      allow read: if canReadFinance(resource.data);
+      allow create: if canWriteFinance(request.resource.data);
+      allow update: if canWriteFinance(resource.data) && sameFinanceScope();
+      allow delete: if canWriteFinance(resource.data);
     }
 
     // Obligations
     match /obligations/{obligationId} {
-      allow read: if isMember(resource.data.memberUids);
-      allow create: if isAuthenticated() &&
-                    (request.auth.uid in request.resource.data.memberUids) &&
+      allow read: if canReadFinance(resource.data);
+      allow create: if canWriteFinance(request.resource.data) &&
                     request.resource.data.createdByUid == request.auth.uid;
-      allow update: if isMember(resource.data.memberUids);
-      allow delete: if isMember(resource.data.memberUids);
+      allow update: if canWriteFinance(resource.data) && sameFinanceScope();
+      allow delete: if canWriteFinance(resource.data);
     }
 
     // Invitations
@@ -117,10 +155,13 @@ service cloud.firestore {
       allow list: if false;
       allow create: if isAuthenticated() &&
                     request.resource.data.createdByUid == request.auth.uid &&
-                    householdMember(request.resource.data.householdId) &&
+                    householdAdmin(request.resource.data.householdId) &&
+                    invitationId.matches('^[A-Z0-9]{1,8}$') &&
+                    request.resource.data.isRevoked == false &&
                     request.resource.data.role in ['editor', 'colaborador', 'lector'];
-      allow update: if isAuthenticated() && householdMember(resource.data.householdId) &&
-                    request.resource.data.householdId == resource.data.householdId;
+      allow update: if householdAdmin(resource.data.householdId) &&
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRevoked']) &&
+                    request.resource.data.isRevoked is bool;
       allow delete: if isAuthenticated() && resource.data.createdByUid == request.auth.uid;
     }
   }

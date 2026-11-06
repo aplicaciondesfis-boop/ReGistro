@@ -299,14 +299,23 @@
   <div id="modalSettings" class="modal-overlay" style="display: none;">
     <div class="modal-content">
       <div class="modal-title">⚙ Administración del Hogar</div>
+      <p id="selectedHouseholdName" class="card-meta"></p>
+      <form id="householdNameForm" class="form-group" hidden>
+        <label class="form-label" for="householdNameInput">Nombre del hogar</label>
+        <input id="householdNameInput" class="form-input" required maxlength="60">
+        <div class="modal-actions">
+          <button id="btnSaveHouseholdName" type="submit" class="btn-secondary">Guardar nombre</button>
+        </div>
+        <p id="householdNameStatus" class="card-meta" role="status"></p>
+      </form>
       
       <div class="form-group">
         <label class="form-label">Miembros actuales:</label>
         <div id="membersList" style="background: var(--surface-variant); padding: 10px; border-radius: 8px; font-size: 0.85rem;"></div>
       </div>
 
+      <section id="householdInviteControls" hidden>
       <hr style="margin: 16px 0; border: none; border-top: 1px solid var(--border);">
-
       <div style="font-weight: bold; margin-bottom: 8px;">Invitar a tu pareja o miembro:</div>
       <div class="form-group">
         <label class="form-label">Rol:</label>
@@ -318,14 +327,16 @@
       </div>
       <button id="btnGenerateInvite" class="btn-primary" style="width: 100%; margin-bottom: 12px;">Generar Código de Invitación</button>
       <div id="inviteResult" style="display: none; background: var(--primary-container); padding: 12px; border-radius: 8px; margin-bottom: 16px;"></div>
+      </section>
 
       <hr style="margin: 16px 0; border: none; border-top: 1px solid var(--border);">
 
       <div style="font-weight: bold; margin-bottom: 8px;">Unirme a otro hogar con código:</div>
       <div style="display: flex; gap: 8px;">
-        <input type="text" id="joinCodeInput" class="form-input" placeholder="Código de 8 dígitos">
+        <input type="text" id="joinCodeInput" class="form-input" aria-label="Código de invitación" placeholder="Código de invitación" maxlength="8">
         <button id="btnJoinHousehold" class="btn-secondary">Unirme</button>
       </div>
+      <p id="joinStatus" class="card-meta" role="status"></p>
 
       <div class="modal-actions">
         <button id="btnCloseSettingsModal" class="btn-secondary">Listo</button>
@@ -340,7 +351,7 @@
       <div id="shoppingModalBody" class="shopping-modal-body"></div>
     </div>
   </div>
-  <script type="module" src="app.js?v=13"></script>
+  <script type="module" src="app.js?v=14"></script>
 
 </body>
 </html>
