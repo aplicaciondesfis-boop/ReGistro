@@ -11,7 +11,7 @@ import {
   addDoc, 
   updateDoc, 
   deleteDoc, 
-  getDoc,
+  getDocFromServer,
   serverTimestamp, 
   Timestamp, 
   writeBatch,
@@ -57,7 +57,8 @@ const db = getFirestore(app, databaseId);
 
 // Estado de la aplicación
 let currentUser = null;
-let activeSpace = "hogar"; // "hogar" o "personal"
+let activeSpace = null; // ID del hogar seleccionado o "personal"
+let dataScope = null;
 let currentHousehold = null;
 let userHouseholds = [];
 let purchases = [];
@@ -94,7 +95,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "listas v13 · 04/11/2026";
+versionTag.textContent = "hogares v14 · 06/11/2026";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 const shopping = iniciarListas({db,getData:()=>({purchases,items:purchaseItems,busy:!!actividadActual}),categorias:CATEGORIAS});
@@ -196,6 +197,9 @@ onAuthStateChanged(auth, async (user) => {
   if (unsubItems) unsubItems();
   if (unsubObligations) unsubObligations();
   currentHousehold = null;
+  activeSpace = user ? lastSpace(user.uid) : null;
+  dataScope = null;
+  modalSettings.style.display = "none";
   userHouseholds = [];
   purchases = [];
   purchaseItems = [];
@@ -204,6 +208,7 @@ onAuthStateChanged(auth, async (user) => {
   itemsReady = false;
   currentUser = user;
   if (user) {
+    renderAll();
     authScreen.style.display = "none";
     mainContent.style.display = "block";
     btnAuth.style.display = "inline-flex";
@@ -222,29 +227,56 @@ onAuthStateChanged(auth, async (user) => {
 function initHouseholdListener(uid) {
   const q = query(collection(db, "households"), where("memberUids", "array-contains", uid));
   if (unsubHouseholds) unsubHouseholds();
-  unsubHouseholds = onSnapshot(q, async (snapshot) => {
+  let creating = false;
+  unsubHouseholds = onSnapshot(q, { includeMetadataChanges: true }, async (snapshot) => {
+    if (currentUser?.uid !== uid) return;
+    if (snapshot.metadata.fromCache && (snapshot.empty ||
+        (activeSpace && activeSpace !== "personal" && !snapshot.docs.some(doc => doc.id === activeSpace)))) return;
     userHouseholds = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (userHouseholds.length === 0) {
-      // Crear hogar inicial
-      const newRef = doc(collection(db, "households"));
-      const h = {
-        name: "Hogar Gualeguaychú",
-        adminUid: uid,
-        memberUids: [uid],
-        members: { [uid]: "admin" },
-        createdAt: serverTimestamp()
-      };
-      await setDoc(newRef, h);
-    } else {
-      if (!currentHousehold) {
-        currentHousehold = userHouseholds[0];
-      } else {
-        currentHousehold = userHouseholds.find(h => h.id === currentHousehold.id) || userHouseholds[0];
+    if (!userHouseholds.length && !creating) {
+      creating = true;
+      try {
+        await setDoc(doc(collection(db, "households")), {
+          name: "Hogar Gualeguaychú",
+          adminUid: uid,
+          memberUids: [uid],
+          members: { [uid]: "admin" },
+          createdAt: serverTimestamp()
+        });
+      } catch (error) {
+        console.error("No se pudo crear el hogar inicial:", error);
+      } finally {
+        creating = false;
       }
-      updateSpaceSelectorUI();
-      listenData();
     }
+    if (currentUser?.uid !== uid) return;
+    const fallback = userHouseholds.find(h => h.adminUid === uid) || userHouseholds[0];
+    const selected = activeSpace === "personal" || userHouseholds.some(h => h.id === activeSpace)
+      ? activeSpace : fallback?.id;
+    selectSpace(selected || "personal");
+  }, error => {
+    console.error("No se pudieron cargar los hogares:", error);
   });
+}
+
+function lastSpace(uid) {
+  try { return window.localStorage.getItem(`finanzas-espacio:${uid}`); }
+  catch { return null; }
+}
+
+function selectSpace(id) {
+  if (!currentUser) return;
+  const household = userHouseholds.find(h => h.id === id);
+  if (id !== "personal" && !household) return;
+  activeSpace = id;
+  currentHousehold = household || null;
+  try { window.localStorage.setItem(`finanzas-espacio:${currentUser.uid}`, id); }
+  catch { /* El selector también funciona sin almacenamiento local. */ }
+  updateSpaceSelectorUI();
+  document.getElementById("summarySpaceLabel").textContent = household
+    ? `RESUMEN DE ${household.name.toUpperCase()}` : "RESUMEN PERSONAL";
+  if (modalSettings.style.display === "flex") renderSettingsMembers();
+  if (dataScope?.uid !== currentUser.uid || dataScope?.id !== id) listenData();
 }
 
 function updateSpaceSelectorUI() {
@@ -252,7 +284,7 @@ function updateSpaceSelectorUI() {
   userHouseholds.forEach(h => {
     const opt = document.createElement("option");
     opt.value = h.id;
-    opt.textContent = `🏠 ${h.name} (Compartido)`;
+    opt.textContent = `🏠 ${h.name} (${h.adminUid === currentUser.uid ? "Tu hogar" : "Compartido"})`;
     if (activeSpace === h.id) opt.selected = true;
     spaceSelector.appendChild(opt);
   });
@@ -264,9 +296,7 @@ function updateSpaceSelectorUI() {
 }
 
 spaceSelector.addEventListener("change", (e) => {
-  activeSpace = e.target.value;
-  if (activeSpace !== "personal") currentHousehold = userHouseholds.find(h => h.id === activeSpace) || currentHousehold;
-  listenData();
+  selectSpace(e.target.value);
 });
 
 // -------------------------------------------------------------
@@ -281,25 +311,32 @@ function listenData() {
   itemsReady = false;
   purchases = [];
   purchaseItems = [];
+  obligations = [];
   if (unsubPurchases) unsubPurchases();
   if (unsubItems) unsubItems();
   if (unsubObligations) unsubObligations();
 
   const isPersonal = activeSpace === "personal";
   const targetHouseholdId = isPersonal ? "personal" : (currentHousehold ? currentHousehold.id : "");
-  if (!targetHouseholdId && !isPersonal) return;
-  shopping.cambiarEspacio({kind:isPersonal?"users":"households",id:isPersonal?currentUser.uid:targetHouseholdId,uid:currentUser.uid});
+  if (!targetHouseholdId || !currentUser) return;
+  const scope = { id: targetHouseholdId, uid: currentUser.uid };
+  dataScope = scope;
+  shopping.cambiarEspacio({ kind: isPersonal ? "users" : "households", id: isPersonal ? scope.uid : scope.id, uid: scope.uid });
+  renderAll();
 
-  document.getElementById("summarySpaceLabel").textContent = isPersonal ? "RESUMEN PERSONAL" : `RESUMEN DE ${currentHousehold ? currentHousehold.name.toUpperCase() : 'HOGAR'}`;
+  const scopedQuery = collectionName => {
+    const bySpace = where("householdId", "==", scope.id);
+    return isPersonal
+      ? query(collection(db, collectionName), bySpace, where("memberUids", "array-contains", scope.uid))
+      : query(collection(db, collectionName), bySpace);
+  };
 
   // 1. Compras
-  let qPurchases = isPersonal
-    ? query(collection(db, "purchases"), where("householdId", "==", "personal"), where("memberUids", "array-contains", currentUser.uid))
-    : query(collection(db, "purchases"), where("householdId", "==", targetHouseholdId), where("memberUids", "array-contains", currentUser.uid));
-
-  unsubPurchases = onSnapshot(qPurchases, { includeMetadataChanges: true }, (snap) => {
+  unsubPurchases = onSnapshot(scopedQuery("purchases"), { includeMetadataChanges: true }, (snap) => {
+    if (dataScope !== scope) return;
     purchasesReady = !snap.metadata.fromCache;
-    purchases = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !isPersonal || p.createdByUid === currentUser.uid);
+    if (!purchasesReady) return;
+    purchases = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !isPersonal || p.createdByUid === scope.uid);
     purchases.sort((a, b) => {
       const da = a.date ? (a.date.toDate ? a.date.toDate() : new Date(a.date)) : new Date();
       const db = b.date ? (b.date.toDate ? b.date.toDate() : new Date(b.date)) : new Date();
@@ -307,33 +344,32 @@ function listenData() {
     });
     renderAll();
   }, (err) => {
+    if (dataScope !== scope) return;
     purchasesReady = false;
     console.error("No se pudieron cargar los tickets:", err);
     alert("No se pudieron cargar los tickets. No se habilitarán nuevas cargas hasta poder comprobar los duplicados. Revisá tu conexión y volvé a abrir la app.");
   });
 
   // 2. Líneas de compra
-  let qItems = isPersonal
-    ? query(collection(db, "purchase_items"), where("householdId", "==", "personal"), where("memberUids", "array-contains", currentUser.uid))
-    : query(collection(db, "purchase_items"), where("householdId", "==", targetHouseholdId), where("memberUids", "array-contains", currentUser.uid));
-
-  unsubItems = onSnapshot(qItems, { includeMetadataChanges: true }, (snap) => {
+  unsubItems = onSnapshot(scopedQuery("purchase_items"), { includeMetadataChanges: true }, (snap) => {
+    if (dataScope !== scope) return;
     itemsReady = !snap.metadata.fromCache;
+    if (!itemsReady) return;
     purchaseItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderAll();
   }, (err) => {
+    if (dataScope !== scope) return;
     itemsReady = false;
     console.error("No se pudieron cargar los productos:", err);
   });
 
   // 3. Obligaciones
-  let qObligations = isPersonal
-    ? query(collection(db, "obligations"), where("householdId", "==", "personal"), where("memberUids", "array-contains", currentUser.uid))
-    : query(collection(db, "obligations"), where("householdId", "==", targetHouseholdId), where("memberUids", "array-contains", currentUser.uid));
-
-  unsubObligations = onSnapshot(qObligations, (snap) => {
-    obligations = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => !isPersonal || o.createdByUid === currentUser.uid);
+  unsubObligations = onSnapshot(scopedQuery("obligations"), { includeMetadataChanges: true }, (snap) => {
+    if (dataScope !== scope || snap.metadata.fromCache) return;
+    obligations = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => !isPersonal || o.createdByUid === scope.uid);
     renderAll();
+  }, error => {
+    if (dataScope === scope) console.error("No se pudieron cargar los pendientes:", error);
   });
 }
 
@@ -1576,7 +1612,8 @@ document.getElementById("btnCloseManualModal").addEventListener("click", () => m
 
 document.getElementById("btnSettings").addEventListener("click", () => {
   modalSettings.style.display = "flex";
-  renderSettingsMembers();
+  renderSettingsMembers(true);
+  document.getElementById("joinStatus").textContent = "";
 });
 document.getElementById("btnCloseSettingsModal").addEventListener("click", () => modalSettings.style.display = "none");
 
@@ -2119,71 +2156,153 @@ async function processParsedTicket(parsed) {
 // -------------------------------------------------------------
 // INVITACIONES
 // -------------------------------------------------------------
-function renderSettingsMembers() {
+function renderSettingsMembers(reset = false) {
+  const household = currentHousehold;
+  const form = document.getElementById("householdNameForm");
+  const owner = Boolean(household && currentUser?.uid === household.adminUid);
+  document.getElementById("selectedHouseholdName").textContent = household?.name || "Espacio personal";
+  form.hidden = !owner;
+  document.getElementById("householdInviteControls").hidden = !owner;
+  if (reset || form.dataset.householdId !== (household?.id || "")) {
+    form.dataset.householdId = household?.id || "";
+    document.getElementById("householdNameInput").value = household?.name || "";
+    document.getElementById("householdNameStatus").textContent = "";
+    document.getElementById("inviteResult").style.display = "none";
+  }
   const container = document.getElementById("membersList");
-  if (!currentHousehold || !currentHousehold.members) {
-    container.textContent = "Cargando integrantes...";
+  if (!household) {
+    container.textContent = "Elegí un hogar para ver sus integrantes.";
     return;
   }
-  container.innerHTML = Object.entries(currentHousehold.members).map(([uid, role]) => `
+  container.innerHTML = Object.entries(household.members || {}).map(([uid, role]) => `
     <div style="display: flex; justify-content: space-between; padding: 4px 0;">
-      <span>Usuario (${uid.slice(0, 6)}...)</span>
-      <strong style="color: var(--primary);">${role.toUpperCase()}</strong>
+      <span>Usuario (${escapeHtml(uid.slice(0, 6))}...)</span>
+      <strong style="color: var(--primary);">${escapeHtml(String(role).toUpperCase())}</strong>
     </div>
   `).join("");
 }
 
+document.getElementById("householdNameForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const household = currentHousehold;
+  const uid = currentUser?.uid;
+  const button = document.getElementById("btnSaveHouseholdName");
+  if (!household || household.adminUid !== uid || button.disabled) return;
+  const status = document.getElementById("householdNameStatus");
+  const input = document.getElementById("householdNameInput");
+  const name = input.value.trim();
+  if (!name || name.length > 60) {
+    status.textContent = "Escribí un nombre de hasta 60 caracteres.";
+    return;
+  }
+  button.disabled = true;
+  input.disabled = true;
+  status.textContent = "Guardando nombre…";
+  try {
+    await updateDoc(doc(db, "households", household.id), { name });
+    if (currentUser?.uid === uid && activeSpace === household.id) {
+      userHouseholds = userHouseholds.map(h => h.id === household.id ? { ...h, name } : h);
+      selectSpace(household.id);
+      input.value = name;
+      status.textContent = "Nombre guardado.";
+    }
+  } catch (error) {
+    console.error("No se pudo cambiar el nombre del hogar:", error);
+    if (currentUser?.uid === uid && activeSpace === household.id) {
+      status.textContent = "No se pudo guardar el nombre. Volvé a intentar.";
+    }
+  } finally {
+    button.disabled = false;
+    input.disabled = false;
+  }
+});
+
 document.getElementById("btnGenerateInvite").addEventListener("click", async () => {
-  if (!currentHousehold) return;
+  const household = currentHousehold;
+  const uid = currentUser?.uid;
+  const button = document.getElementById("btnGenerateInvite");
+  if (!household || household.adminUid !== uid || button.disabled) return;
   const role = document.getElementById("inviteRoleSelect").value;
-  const token = Math.random().toString(36).substring(2, 10).toUpperCase();
-
-  await setDoc(doc(db, "invitations", token), {
-    householdId: currentHousehold.id,
-    householdName: currentHousehold.name,
-    role: role,
-    createdByUid: currentUser.uid,
-    isRevoked: false,
-    createdAt: serverTimestamp()
-  });
-
   const resDiv = document.getElementById("inviteResult");
-  resDiv.style.display = "block";
-  resDiv.innerHTML = `
-    <div style="font-size: 0.8rem; color: var(--text-muted);">Código generado para tu pareja:</div>
-    <div style="font-size: 1.4rem; font-weight: 800; color: var(--primary);">${token}</div>
-    <div style="font-size: 0.8rem;">Rol: <strong>${role.toUpperCase()}</strong></div>
-  `;
+  button.disabled = true;
+  try {
+    const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const token = Array.from(crypto.getRandomValues(new Uint8Array(8)), byte => alphabet[byte % alphabet.length]).join("");
+    await setDoc(doc(db, "invitations", token), {
+      householdId: household.id,
+      householdName: household.name,
+      role,
+      createdByUid: uid,
+      isRevoked: false,
+      createdAt: serverTimestamp()
+    });
+    if (currentUser?.uid !== uid || activeSpace !== household.id) return;
+    resDiv.style.display = "block";
+    resDiv.innerHTML = `<div>Código para ${escapeHtml(household.name)}</div>
+      <strong style="font-size: 1.4rem; color: var(--primary)">${token}</strong>
+      <div>Rol: ${escapeHtml(role)}</div>`;
+  } catch (error) {
+    console.error("No se pudo crear la invitación:", error);
+    if (currentUser?.uid === uid && activeSpace === household.id) {
+      resDiv.style.display = "block";
+      resDiv.textContent = "No se pudo generar el código. Volvé a intentar.";
+    }
+  } finally {
+    button.disabled = false;
+  }
 });
 
 document.getElementById("btnJoinHousehold").addEventListener("click", async () => {
-  if (!currentUser) return;
+  const uid = currentUser?.uid;
+  const button = document.getElementById("btnJoinHousehold");
+  if (!uid || button.disabled || actividadActual) return;
+  const input = document.getElementById("joinCodeInput");
+  const status = document.getElementById("joinStatus");
+  const code = input.value.trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,8}$/.test(code)) {
+    status.textContent = "Ingresá el código de invitación.";
+    return;
+  }
+  button.disabled = true;
+  status.textContent = "Abriendo hogar…";
   try {
-  const code = document.getElementById("joinCodeInput").value.trim().toUpperCase();
-  if (!code) return;
-
-  const inviteSnap = await getDoc(doc(db, "invitations", code));
-  if (!inviteSnap.exists()) {
-    alert("Código de invitación no encontrado.");
-    return;
-  }
-  const invite = inviteSnap.data();
-  if (invite.isRevoked) {
-    alert("Esta invitación fue revocada.");
-    return;
-  }
-
-  const hRef = doc(db, "households", invite.householdId);
-  await updateDoc(hRef, {
-    memberUids: arrayUnion(currentUser.uid),
-    [`members.${currentUser.uid}`]: invite.role,
-    joinToken: code
-  });
-
-  alert(`¡Te uniste con éxito a '${invite.householdName || "tu hogar"}'!`);
-  modalSettings.style.display = "none";
-  } catch (err) {
-    alert("No se pudo usar la invitación. Revisá el código y volvé a intentar. " + err.message);
+    const inviteSnap = await getDocFromServer(doc(db, "invitations", code));
+    if (currentUser?.uid !== uid) return;
+    if (!inviteSnap.exists() || inviteSnap.data().isRevoked) {
+      status.textContent = "El código no existe o fue revocado.";
+      return;
+    }
+    const invite = inviteSnap.data();
+    const hRef = doc(db, "households", invite.householdId);
+    if (!userHouseholds.some(h => h.id === invite.householdId)) {
+      try {
+        await updateDoc(hRef, {
+          memberUids: arrayUnion(uid),
+          [`members.${uid}`]: invite.role,
+          joinToken: code
+        });
+      } catch (error) {
+        // Si otro dispositivo ya aceptó el código, la lectura de abajo confirma el acceso.
+        if (error.code !== "permission-denied") throw error;
+      }
+    }
+    if (currentUser?.uid !== uid) return;
+    const joined = await getDocFromServer(hRef);
+    if (currentUser?.uid !== uid) return;
+    if (!joined.exists() || !joined.data().memberUids.includes(uid)) {
+      throw new Error("La cuenta no figura entre los integrantes.");
+    }
+    const household = { id: joined.id, ...joined.data() };
+    userHouseholds = [...userHouseholds.filter(h => h.id !== household.id), household];
+    modalSettings.style.display = "none";
+    input.value = "";
+    status.textContent = "";
+    selectSpace(household.id);
+  } catch (error) {
+    console.error("No se pudo usar la invitación:", error);
+    if (currentUser?.uid === uid) status.textContent = "No se pudo abrir el hogar. Revisá el código y volvé a intentar.";
+  } finally {
+    button.disabled = false;
   }
 });
 
