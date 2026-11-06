@@ -23,7 +23,8 @@ import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken as getAppChec
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
 import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs?v=12";
 import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "./productos.mjs?v=12";
-import { iniciarListas } from "./listas.js?v=15";
+import { iniciarListas } from "./listas.js?v=16";
+import { guardarPreferencias, leerPreferencias, periodosMensuales } from "./preferencias.mjs?v=16";
 
 // Configuración del proyecto aprovisionado en Firebase
 const firebaseConfig = {
@@ -95,7 +96,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "listas v15";
+versionTag.textContent = "vistas v16";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 const shopping = iniciarListas({db,getData:()=>({purchases,items:purchaseItems,busy:!!actividadActual}),categorias:CATEGORIAS});
@@ -207,6 +208,7 @@ onAuthStateChanged(auth, async (user) => {
   purchasesReady = false;
   itemsReady = false;
   currentUser = user;
+  cargarPreferenciasResumen(null);
   if (user) {
     renderAll();
     authScreen.style.display = "none";
@@ -321,6 +323,7 @@ function listenData() {
   if (!targetHouseholdId || !currentUser) return;
   const scope = { id: targetHouseholdId, uid: currentUser.uid };
   dataScope = scope;
+  cargarPreferenciasResumen(scope);
   shopping.cambiarEspacio({ kind: isPersonal ? "users" : "households", id: isPersonal ? scope.uid : scope.id, uid: scope.uid });
   renderAll();
 
@@ -395,6 +398,14 @@ const ui = {
 };
 const sortState = { productos: { key: "compras", dir: "desc" } }; // orden por tabla
 const filasAbiertas = new Set();                                   // filas desplegadas
+const GRAFICOS_RESUMEN = {
+  tienda: "Total pagado por tienda",
+  medio: "Total pagado por medio de pago",
+  categoria: "Gasto por categoría (neto de descuentos)"
+};
+const ORDEN_RESUMEN = Object.keys(GRAFICOS_RESUMEN);
+let resumenPrefs = { orden: ORDEN_RESUMEN, ocultos: ["categoria"], vistas: [] };
+let compararMeses = false;
 
 // ---------- Ayudas chicas ----------
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -460,9 +471,9 @@ function coincideFecha(p) {
 }
 
 // usar: lista de filtros extra a aplicar además de la fecha ("tienda", "medio")
-function comprasFiltradas(usar = []) {
+function comprasFiltradas(usar = [], fecha = coincideFecha) {
   return purchases.filter(p =>
-    coincideFecha(p) &&
+    fecha(p) &&
     (!usar.includes("tienda") || ui.tienda === "todas" || p.storeName === ui.tienda) &&
     (!usar.includes("medio") || ui.medio === "todos" || medioLabel(p.paymentMethod) === ui.medio)
   );
@@ -661,9 +672,136 @@ function renderEncabezado() {
 }
 
 // ----- Pestaña 1: RESUMEN -----
+function cargarPreferenciasResumen(scope) {
+  const saved = leerPreferencias("resumen", scope);
+  const orden = Array.isArray(saved.orden) ? saved.orden.filter(id => ORDEN_RESUMEN.includes(id)) : [];
+  resumenPrefs = {
+    orden: [...new Set([...orden, ...ORDEN_RESUMEN])],
+    ocultos: Array.isArray(saved.ocultos) ? saved.ocultos : ["categoria"],
+    vistas: Array.isArray(saved.vistas) ? saved.vistas.filter(v => typeof v?.nombre === "string") : []
+  };
+  compararMeses = false;
+  document.getElementById("resumenPersonalizar").open = false;
+  document.getElementById("resumenNombreVista").value = "";
+  document.getElementById("resumenVistasEstado").textContent = "";
+  renderControlesResumen();
+}
+
+function renderControlesResumen() {
+  const { orden, ocultos, vistas } = resumenPrefs;
+  document.getElementById("resumenOrdenGraficos").innerHTML = orden.map((id, index) => {
+    const title = GRAFICOS_RESUMEN[id];
+    return `<div class="resumen-opcion">
+      <label class="check-repetidos"><input type="checkbox" data-resumen-grafico="${id}" ${ocultos.includes(id) ? "" : "checked"}>${esc(title)}</label>
+      <button type="button" class="btn-chico" data-grafico="${id}" data-mover="-1" aria-label="Subir ${esc(title)}" ${index === 0 ? "disabled" : ""}>Subir</button>
+      <button type="button" class="btn-chico" data-grafico="${id}" data-mover="1" aria-label="Bajar ${esc(title)}" ${index === orden.length - 1 ? "disabled" : ""}>Bajar</button>
+    </div>`;
+  }).join("");
+  document.getElementById("resumenVistasGuardadas").innerHTML = vistas.map((vista, i) =>
+    `<button type="button" class="chip" data-abrir-vista="${i}">${esc(vista.nombre)}</button>`
+  ).join("");
+  document.getElementById("resumenGestionVistas").innerHTML = vistas.map((vista, i) =>
+    `<div class="resumen-opcion"><span>${esc(vista.nombre)}</span><button type="button" class="btn-chico" data-borrar-vista="${i}" aria-label="Quitar vista ${esc(vista.nombre)}">Quitar vista</button></div>`
+  ).join("");
+}
+
+function actualizarPreferenciasResumen(next, message = "Preferencias guardadas.") {
+  const status = document.getElementById("resumenVistasEstado");
+  if (!guardarPreferencias("resumen", dataScope, next)) {
+    status.textContent = "Este navegador no pudo guardar tus preferencias.";
+    return false;
+  }
+  resumenPrefs = next;
+  status.textContent = message;
+  renderControlesResumen();
+  renderResumen();
+  return true;
+}
+
+document.getElementById("btnCompararMeses").addEventListener("click", () => {
+  compararMeses = !compararMeses;
+  renderResumen();
+});
+document.getElementById("resumenVistasGuardadas").addEventListener("click", e => {
+  const button = e.target.closest("[data-abrir-vista]");
+  if (!button) return;
+  const vista = resumenPrefs.vistas[Number(button.dataset.abrirVista)];
+  if (!vista) return;
+  ui.fecha = vista.fecha;
+  ui.tienda = vista.tienda;
+  ui.medio = vista.medio;
+  compararMeses = vista.comparar === true;
+  renderAll();
+});
+document.getElementById("resumenGuardarVista").addEventListener("submit", e => {
+  e.preventDefault();
+  const input = document.getElementById("resumenNombreVista"), nombre = input.value.trim();
+  if (!nombre || nombre.length > 48) {
+    document.getElementById("resumenVistasEstado").textContent = "Escribí un nombre de hasta 48 caracteres.";
+    return;
+  }
+  const vista = { nombre, fecha: ui.fecha, tienda: ui.tienda, medio: ui.medio, comparar: compararMeses };
+  const vistas = [...resumenPrefs.vistas];
+  const index = vistas.findIndex(v => sinAcentos(v.nombre) === sinAcentos(nombre));
+  if (index < 0) vistas.push(vista);
+  else vistas[index] = vista;
+  if (actualizarPreferenciasResumen({ ...resumenPrefs, vistas }, "Vista guardada.")) input.value = "";
+});
+document.getElementById("resumenGestionVistas").addEventListener("click", e => {
+  const button = e.target.closest("[data-borrar-vista]");
+  if (!button) return;
+  const vistas = resumenPrefs.vistas.filter((_, i) => i !== Number(button.dataset.borrarVista));
+  if (actualizarPreferenciasResumen({ ...resumenPrefs, vistas }, "Vista quitada.")) document.getElementById("resumenNombreVista").focus();
+});
+document.getElementById("resumenOrdenGraficos").addEventListener("change", e => {
+  const id = e.target.dataset.resumenGrafico;
+  if (!ORDEN_RESUMEN.includes(id)) return;
+  const ocultos = resumenPrefs.ocultos.filter(grafico => grafico !== id);
+  if (!e.target.checked) ocultos.push(id);
+  if (!actualizarPreferenciasResumen({ ...resumenPrefs, ocultos })) e.target.checked = !e.target.checked;
+  else document.getElementById("resumenOrdenGraficos").querySelector(`[data-resumen-grafico="${id}"]`).focus();
+});
+document.getElementById("resumenOrdenGraficos").addEventListener("click", e => {
+  const button = e.target.closest("[data-mover]");
+  if (!button) return;
+  const { grafico, mover } = button.dataset;
+  const orden = [...resumenPrefs.orden], from = orden.indexOf(grafico), to = from + Number(mover);
+  if (from < 0 || to < 0 || to >= orden.length) return;
+  [orden[from], orden[to]] = [orden[to], orden[from]];
+  if (actualizarPreferenciasResumen({ ...resumenPrefs, orden })) {
+    document.getElementById("resumenOrdenGraficos").querySelector(`[data-resumen-grafico="${grafico}"]`).focus();
+  }
+});
+
+function dentroDelPeriodo(p, periodo) {
+  const fecha = aFecha(p.date);
+  return fecha && fecha >= periodo.inicio && fecha < periodo.fin;
+}
+
+function renderComparacion(periodos, listas) {
+  const labels = ["Este mes", "Mes anterior"];
+  const totales = listas.map(lista => sumar(lista, costoRealDe));
+  const diferencia = totales[0] - totales[1];
+  const cifras = periodos.map(({ inicio, fin }, i) => {
+    const ultimoDia = new Date(fin.getFullYear(), fin.getMonth(), fin.getDate() - 1).getDate();
+    const mes = MESES[inicio.getMonth()].toLowerCase();
+    return `<div><strong>${labels[i]}</strong><span class="card-meta">Del 1 al ${ultimoDia} de ${mes} de ${inicio.getFullYear()} · ${listas[i].length} compras</span><strong>${moneda(totales[i])}</strong></div>`;
+  }).join("");
+  const diferenciaHtml = `<p>Diferencia <strong>${diferencia > 0 ? "+" : diferencia < 0 ? "−" : ""}${moneda(Math.abs(diferencia))}</strong></p>`;
+  return cardGrafico("Este mes vs. el anterior", `<p class="card-meta">Costo real después de reintegros, con el mismo corte de días. Abajo se muestran las compras de este mes.</p><div class="resumen-periodos">${cifras}</div>${diferenciaHtml}`);
+}
+
 function renderResumen() {
-  document.getElementById("filtros-resumen").innerHTML = barraFiltros(["fecha", "tienda", "medio"]);
-  const lista = comprasFiltradas(["tienda", "medio"]);
+  const compareButton = document.getElementById("btnCompararMeses");
+  compareButton.setAttribute("aria-pressed", String(compararMeses));
+  compareButton.classList.toggle("active", compararMeses);
+  document.getElementById("filtros-resumen").innerHTML = barraFiltros(compararMeses ? ["tienda", "medio"] : ["fecha", "tienda", "medio"]);
+  const filtros = ["tienda", "medio"];
+  const periodos = compararMeses ? periodosMensuales(new Date()) : null;
+  const lista = comprasFiltradas(filtros, periodos ? p => dentroDelPeriodo(p, periodos[0]) : coincideFecha);
+  const comparacion = document.getElementById("resumenComparacion");
+  comparacion.hidden = !compararMeses;
+  comparacion.innerHTML = periodos ? renderComparacion(periodos, [lista, comprasFiltradas(filtros, p => dentroDelPeriodo(p, periodos[1]))]) : "";
 
   document.getElementById("resumenKpis").innerHTML =
     tarjetaKpi("Total pagado", moneda(sumar(lista, p => p.totalPaid))) +
@@ -682,9 +820,21 @@ function renderResumen() {
   });
   const ordenar = (obj) => Object.entries(obj).map(([nombre, valor]) => ({ nombre, valor })).sort((a, b) => b.valor - a.valor);
 
-  document.getElementById("resumenGraficos").innerHTML =
-    cardGrafico("Total pagado por tienda", barrasHtml(ordenar(porTienda))) +
-    cardGrafico("Total pagado por medio de pago", donutHtml(ordenar(porMedio)));
+  const charts = {
+    tienda: () => barrasHtml(ordenar(porTienda)),
+    medio: () => donutHtml(ordenar(porMedio)),
+    categoria: () => {
+      const ids = new Set(lista.map(p => p.id)), porCategoria = {};
+      for (const item of purchaseItems) {
+        if (!ids.has(item.purchaseId)) continue;
+        const nombre = categoriaDe(item);
+        porCategoria[nombre] = (porCategoria[nombre] || 0) + (item.lineTotal || 0);
+      }
+      return donutHtml(ordenar(porCategoria));
+    }
+  };
+  document.getElementById("resumenGraficos").innerHTML = resumenPrefs.orden.filter(id => !resumenPrefs.ocultos.includes(id))
+    .map(id => cardGrafico(GRAFICOS_RESUMEN[id], charts[id]())).join("");
 
   document.getElementById("resumenCount").textContent = `${lista.length} registros · tocá una fila para ver el detalle`;
   document.getElementById("resumenCompras").innerHTML = tablaHtml(

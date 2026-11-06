@@ -19,6 +19,20 @@ test("dos altas concurrentes reutilizan el mismo pendiente y unen sus listas",as
   const r=await Promise.all([m.repo.guardarNecesidad({name:"Aceite",listIds:[a]}),m.repo.guardarNecesidad({name:"ACEITE",listIds:[b]})]);
   assert.equal(r[0].id,r[1].id);assert.equal(m.records("shopping_needs").length,1);assert.equal(m.records("shopping_needs")[0].listIds.length,2);
 });
+test("usar una sugerencia agrega la lista elegida y conserva los detalles del pendiente",async()=>{
+  const m=memoria(),a=await m.repo.crearLista("A"),b=await m.repo.crearLista("B");
+  const {need}=await m.repo.guardarNecesidad({name:"Aceite de girasol",brand:"Marca A",quantity:2,unit:"l",note:"Botellas",listIds:[a]});
+  await m.repo.archivar(a,[]);
+  const result=await m.repo.usarNecesidad(need,[b],"");
+  assert.equal(result.id,need.id);
+  assert.equal(m.records("shopping_needs").length,1);
+  assert.deepEqual(m.records("shopping_needs")[0].listIds,[a,b]);
+  assert.equal(result.need.quantity,2);
+  assert.equal(result.need.note,"Botellas");
+  assert.equal(result.need.brand,"Marca A");
+  await m.repo.completar(need.id,false,true);
+  await assert.rejects(m.repo.usarNecesidad(need,[],""),/faltante cambió/);
+});
 test("crear lista durante la carga guarda ambos documentos y editar mantiene la referencia",async()=>{
   const m=memoria();const n=await m.repo.guardarNecesidad({name:"Papa"},null,"Verdulería");const l=m.records("shopping_lists")[0];assert.equal(l.name,"Verdulería");
   await m.repo.guardarNecesidad({name:"Papa negra",listIds:[l.id]},n.id);assert.equal(m.records("shopping_needs")[0].name,"Papa negra");assert.deepEqual(m.records("shopping_lists")[0].needIds,[n.id]);

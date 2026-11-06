@@ -1,4 +1,21 @@
-import {normalizar,validarNecesidad} from "./compras.mjs?v=12";
+import {claveNecesidad,normalizar,pendiente,validarNecesidad} from "./compras.mjs?v=12";
+
+export function posiblesDuplicados(input, needs) {
+  const brand = normalizar(input.brand), key = claveNecesidad(input);
+  const activos = needs.filter(pendiente);
+  // La misma clave ya se reutiliza al guardar. El aviso cubre nombres o marcas distintos.
+  if (activos.some(n => claveNecesidad(n) === key)) return [];
+
+  const words = name => normalizar(name).split(" ").map(word => word.replace(/([a-z]{4,})s$/, "$1"));
+  const requested = words(input.name);
+  return activos.filter(n => {
+    const otherBrand = normalizar(n.brand);
+    if (brand && otherBrand && brand !== otherBrand) return false;
+    const existing = words(n.name);
+    const [short, long] = requested.length <= existing.length ? [requested, existing] : [existing, requested];
+    return short[0].length >= 3 && short.every((word, index) => word === long[index]);
+  });
+}
 
 export function separarProductos(text,all=false) {
   const lines=String(text||"").replace(/\r\n?/g,"\n").split("\n"),rest=all?"":lines.pop();
@@ -26,9 +43,11 @@ export function crearEntradaRapida({getScope,guardar,onChange=()=>{}}) {
       try{
         for(;index<job.names.length;index++){
           if(job.generation!==generation||job.scope!==getScope())break;
-          await guardar(job.names[index],job.options,job.scope);
+          const saved = await guardar(job.names[index],job.options,job.scope);
           if(job.generation!==generation)break;
-          s.pending--;s.saved++;onChange();
+          s.pending--;
+          if(saved!==false)s.saved++;
+          onChange();
         }
         job.resolve(index===job.names.length);
       }catch(e){

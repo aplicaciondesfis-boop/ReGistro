@@ -1,10 +1,12 @@
 import * as firestore from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
 import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=12";
-import {crearRepositorioListas} from "./listas-store.mjs?v=15";
-import {crearEntradaRapida} from "./listas-entrada.mjs?v=12";
+import {crearRepositorioListas} from "./listas-store.mjs?v=16";
+import {crearEntradaRapida,posiblesDuplicados} from "./listas-entrada.mjs?v=16";
+import {guardarPreferencias,leerPreferencias} from "./preferencias.mjs?v=16";
 
 export function iniciarListas({db,getData,categorias}) {
   const root=document.getElementById("shoppingApp"),fab=document.getElementById("shoppingFab"),overlay=document.getElementById("shoppingModal"),body=document.getElementById("shoppingModalBody");
+  const duplicateDialog=document.getElementById("shoppingDuplicate");
   const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const money=n=>"$ "+Number(n||0).toLocaleString("es-AR",{maximumFractionDigits:2});
   const date=d=>{const v=fechaDato(d);return v&&!isNaN(+v)?v.toLocaleDateString("es-AR"):"—";};
@@ -12,8 +14,48 @@ export function iniciarListas({db,getData,categorias}) {
   let context=null,repo=null,needs=[],lists=[],promos=[],unsubs=[],ready=new Set(),error="",busy=false,mode="active",sort="manual",onlyLoose=false,dialog=null,catalog=[],queue=[],receipt=null,matches=[];
   let shoppingDate=new Date().toLocaleDateString("en-CA");
   let expanded=new Set(),quickSelections=new Map(),detailedDraft=null;
-  const entrada=crearEntradaRapida({getScope:()=>repo,guardar:(name,options,target)=>target.guardarNecesidad({name,listIds:options.listIds||[],category:catalog.find(p=>p.key===normalizar(name))?.category||"Sin detalle"}),onChange:()=>render()});
+  let cardPrefs={},resolverDuplicado=null;
+  const recentNeeds=new Map();
+  const colors=["Naranja","Verde","Azul","Violeta","Rosa"];
+  const cardPref=id=>Object.hasOwn(cardPrefs,id)?cardPrefs[id]||{}:{};
   const activeLists=()=>lists.filter(l=>l.status==="active");
+  const entrada=crearEntradaRapida({getScope:()=>repo,guardar:(name,options,target)=>guardarProducto(target,{name,listIds:options.listIds||[],category:catalog.find(p=>p.key===normalizar(name))?.category||"Sin detalle"}),onChange:()=>render()});
+
+  function elegirDuplicado(input,candidates){
+    duplicateDialog.returnValue="";
+    duplicateDialog.querySelector("#shoppingDuplicateName").textContent=`«${input.name}» se parece a un producto que ya tenés pendiente.`;
+    duplicateDialog.querySelector("#shoppingDuplicateExisting").innerHTML=candidates.map(n=>{
+      const names=activeLists().filter(l=>n.listIds?.includes(l.id)).map(l=>l.name);
+      return `<option value="${esc(n.id)}">${esc([n.name,n.brand,names.join(", ")].filter(Boolean).join(" · "))}</option>`;
+    }).join("");
+    duplicateDialog.showModal();
+    return new Promise(resolve=>{resolverDuplicado=resolve;});
+  }
+
+  duplicateDialog.addEventListener("close",()=>{
+    const id=duplicateDialog.querySelector("#shoppingDuplicateExisting").value;
+    resolverDuplicado?.({choice:duplicateDialog.returnValue,id});
+    resolverDuplicado=null;
+  });
+
+  async function guardarProducto(target,input,id=null,newListName=""){
+    const candidates=id?[]:posiblesDuplicados(input,[...needs,...recentNeeds.values()]);
+    const selectedLists=new Set(input.listIds||[]);
+    const enLista=n=>Number(n.listIds?.some(id=>selectedLists.has(id))||false);
+    candidates.sort((a,b)=>enLista(b)-enLista(a)||a.name.localeCompare(b.name,"es"));
+    let existing;
+    if(candidates.length){
+      const {choice,id:selected}=await elegirDuplicado(input,candidates);
+      if(target!==repo||!["existing","new"].includes(choice))return false;
+      if(choice==="existing")existing=candidates.find(n=>n.id===selected);
+    }
+    const result=existing
+      ? await target.usarNecesidad(existing,input.listIds||[],newListName)
+      : await target.guardarNecesidad(input,id,newListName);
+    // Un pegado puede llegar al renglón siguiente antes que la escucha de Firestore.
+    if(target===repo&&!needs.some(n=>n.id===result.id))recentNeeds.set(result.id,result.need);
+    return result;
+  }
   const action=(name,label,id="",cls="btn-chico")=>`<button type="button" class="${cls}" data-shopping-action="${name}" data-id="${esc(id)}">${label}</button>`;
   const usable=()=>context&&ready.size===3&&!error;
   const dialogError=message=>{const e=body.querySelector("[data-shopping-error]");if(e&&overlay.style.display!=="none")e.textContent=message;else alert(message);};
@@ -71,8 +113,9 @@ export function iniciarListas({db,getData,categorias}) {
   const isLoose=n=>!(n.listIds||[]).some(id=>activeLists().some(l=>l.id===id));
   function card(l=null){
     const key=l?l.id:"loose",opened=expanded.has(key),all=needs.filter(n=>!n.cancelled&&(l?(l.needIds||[]).includes(n.id):isLoose(n))),pending=ordered(all.filter(pendiente),l),done=all.filter(n=>n.done).length;
-    const title=l?.name||"Productos a comprar",color=l?1+[...l.id].reduce((v,c)=>v+c.charCodeAt(0),0)%4:0;
-    return `<article class="shopping-note shopping-note-${color} ${opened?"is-expanded":""}" data-shopping-card="${esc(key)}"><div class="shopping-note-head"><div><span class="shopping-note-kicker">${l?"MI LISTA":"PRODUCTOS SUELTOS"}</span><h3>${esc(title)}</h3><p>${pending.length} pendiente${pending.length===1?"":"s"}${l?` · ${done} comprado${done===1?"":"s"}`:" · sin asignar a una lista"}</p></div><button type="button" class="shopping-expand" data-shopping-action="expand-card" data-id="${esc(key)}" aria-expanded="${opened}" aria-controls="shopping-card-${esc(key)}" aria-label="${opened?"Contraer":"Expandir"} ${esc(title)}">${opened?"−":"+"}</button></div>
+    const title=l?.name||"Productos a comprar",prefs=l?cardPref(l.id):{},customColor=colors.indexOf(prefs.color);
+    const color=customColor>=0?customColor:l?1+[...l.id].reduce((v,c)=>v+c.charCodeAt(0),0)%4:0;
+    return `<article class="shopping-note shopping-note-${color} ${opened?"is-expanded":""}" data-shopping-card="${esc(key)}"><div class="shopping-note-head"><div><span class="shopping-note-kicker">${l?(prefs.pinned?"FIJADA":"MI LISTA"):"PRODUCTOS SUELTOS"}</span><h3>${esc(title)}</h3><p>${pending.length} pendiente${pending.length===1?"":"s"}${l?` · ${done} comprado${done===1?"":"s"}`:" · sin asignar a una lista"}</p></div><button type="button" class="shopping-expand" data-shopping-action="expand-card" data-id="${esc(key)}" aria-expanded="${opened}" aria-controls="shopping-card-${esc(key)}" aria-label="${opened?"Contraer":"Expandir"} ${esc(title)}">${opened?"−":"+"}</button></div>
       <div id="shopping-card-${esc(key)}" class="shopping-note-content"><div class="shopping-note-products" data-card-scroll="${esc(key)}">${opened?rows(pending,l?.id||"",false,true):pending.length?`<ul class="shopping-preview">${pending.slice(0,3).map(n=>`<li><label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}"><span>${esc(n.name)}</span></label></li>`).join("")}</ul>${pending.length>3?`<p class="shopping-preview-more">Y ${pending.length-3} más…</p>`:""}`:'<p class="shopping-note-empty">Anotá acá lo que necesitás comprar.</p>'}</div>${opened?composer("card:"+key):""}</div>
       <div class="shopping-note-footer">${action("card-add","＋ Agregar productos",key,"shopping-text-button")}${l?action("open-list","Detalles y precios",l.id,"shopping-text-button"):action("compare-loose","Comparar precios","","shopping-text-button")}</div></article>`;
   }
@@ -85,11 +128,11 @@ export function iniciarListas({db,getData,categorias}) {
     if(!context){root.innerHTML="";return;}
     if(error){root.innerHTML=`<div class="aviso aviso-warn">${esc(error)}</div>${action("retry","Volver a intentar","","btn-secondary")}`;return;}
     if(!usable()){root.innerHTML='<div class="vacio">Sincronizando tus listas…</div>';return;}
-    const pending=needs.filter(pendiente),loose=pending.filter(n=>!(n.listIds||[]).some(id=>activeLists().some(l=>l.id===id)));
+    const pending=needs.filter(pendiente),loose=pending.filter(isLoose),active=activeLists();
     root.innerHTML=`<div class="shopping-toolbar"><div><h2>Productos faltantes</h2><p class="card-meta">${pending.length} pendientes · ${loose.length} sueltos · compartidos en este espacio</p></div><div class="shopping-row-actions">${action("new-list","Crear nueva lista","","btn-secondary")}${action("add-need","＋ Anotar productos","","btn-primary")}</div></div>
       <div class="chips">${action("view-active","Faltantes y listas","","chip "+(mode==="active"?"active":""))}${action("view-history","Historial","","chip "+(mode==="history"?"active":""))}${action("view-benefits","Beneficios","","chip "+(mode==="benefits"?"active":""))}</div>
       ${mode==="active"?`<div class="shopping-toolbar"><label class="check-repetidos"><input type="checkbox" data-shopping-loose ${onlyLoose?"checked":""}> Solo productos sueltos</label><label class="card-meta">Orden <select class="filtro-select" data-shopping-sort><option value="manual" ${sort==="manual"?"selected":""}>Manual</option><option value="category" ${sort==="category"?"selected":""}>Por categoría</option></select></label>${action("compare-all","Comparar precios")}</div>
-        <div class="shopping-notes-grid">${card()}${onlyLoose?"":activeLists().map(l=>card(l)).join("")}</div>`:
+        <div class="shopping-notes-grid">${onlyLoose?"":active.filter(l=>cardPref(l.id).pinned).map(card).join("")}${card()}${onlyLoose?"":active.filter(l=>!cardPref(l.id).pinned).map(card).join("")}</div>`:
       mode==="history"?`<h2>Listas finalizadas</h2>${cards(lists.filter(l=>l.status==="completed").sort((a,b)=>(+fechaDato(b.closedAt)||0)-(+fechaDato(a.closedAt)||0)),true)}<h3>Comprados o borrados recientes</h3>${rows(needs.filter(n=>n.done||n.cancelled).sort((a,b)=>(+fechaDato(b.updatedAt)||0)-(+fechaDato(a.updatedAt)||0)).slice(0,20))}`:
       `<div class="shopping-toolbar"><h2>Descuentos y reintegros posibles</h2>${action("add-benefit","Anotar beneficio","","btn-primary")}</div><p class="card-meta">Guardá condiciones conocidas: días, comercio y medio de pago. Se muestran por separado en las recomendaciones.</p>${promos.map(p=>`<article class="card-grafico">${benefitHtml(p)}${action("edit-benefit","Editar",p.id)}</article>`).join("")||'<div class="vacio">Todavía no anotaste beneficios.</div>'}`}`;
     if(dialog?.kind==="list")showList(dialog.id);
@@ -132,7 +175,21 @@ export function iniciarListas({db,getData,categorias}) {
     body.querySelector('[name="name"]').focus({preventScroll:true});
   }
   function showList(id){const l=lists.find(x=>x.id===id);if(!l)return;const ns=needs.filter(n=>(l.needIds||[]).includes(n.id)&&!n.cancelled);
-    open("list",`<h2>${esc(l.name)}</h2><div class="shopping-toolbar">${action("add-to-list","＋ Agregar producto",id,"btn-primary")}${action("rename","Renombrar",id)}${action("duplicate","Reutilizar",id)}${action("archive","Finalizar y guardar historial",id)}</div><label class="form-label">Orden<select class="filtro-select" data-shopping-sort><option value="manual" ${sort==="manual"?"selected":""}>Manual</option><option value="category" ${sort==="category"?"selected":""}>Categoría</option></select></label>${rows(ns,id)}<details open><summary>Comparación de precios</summary>${quoteHtml(ns)}</details>${errorHtml}`,id);}
+    open("list",`<h2>${esc(l.name)}</h2><div class="shopping-toolbar">${action("add-to-list","＋ Agregar producto",id,"btn-primary")}${action("personalize","Personalizar lista",id)}${action("rename","Renombrar",id)}${action("duplicate","Reutilizar",id)}${action("archive","Finalizar y guardar historial",id)}</div><label class="form-label">Orden<select class="filtro-select" data-shopping-sort><option value="manual" ${sort==="manual"?"selected":""}>Manual</option><option value="category" ${sort==="category"?"selected":""}>Categoría</option></select></label>${rows(ns,id)}<details open><summary>Comparación de precios</summary>${quoteHtml(ns)}</details>${errorHtml}`,id);}
+
+  function personalizeList(id){
+    const list=activeLists().find(l=>l.id===id);
+    if(!list)return;
+    const prefs=cardPref(id);
+    open("list-preferences",`<h2>Personalizar ${esc(list.name)}</h2><p class="card-meta">Esta vista se guarda para tu cuenta en este navegador.</p>
+      <form data-shopping-form="list-preferences" data-id="${esc(id)}">
+        <label class="form-label">Color de la tarjeta<select name="color" class="form-select"><option value="">Automático</option>${colors.map(color=>`<option ${prefs.color===color?"selected":""}>${color}</option>`).join("")}</select></label>
+        <label class="shopping-check"><input name="pinned" type="checkbox" ${prefs.pinned?"checked":""}> Fijar arriba</label>
+        ${errorHtml}<div class="modal-actions"><button class="btn-primary">Guardar preferencias</button></div>
+      </form>`,id);
+    body.scrollTop=0;
+    body.querySelector('select[name="color"]').focus({preventScroll:true});
+  }
   function benefitForm(id){const p=promos.find(x=>x.id===id)||{};open("benefit",`<h2>Anotar beneficio</h2><form data-shopping-form="benefit" data-id="${esc(id||"")}"><div class="correction-grid">
     <label class="form-label">Comercio<input name="store" class="form-input" required list="shoppingStores" value="${esc(p.store||"")}"></label><datalist id="shoppingStores">${[...new Set(catalog.map(x=>x.store))].map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist>
     <label class="form-label">Nombre<input name="name" class="form-input" required maxlength="120" value="${esc(p.name||"")}"></label>
@@ -149,6 +206,7 @@ export function iniciarListas({db,getData,categorias}) {
     if(a==="quick-new-list"){listNameForm("new","",id);return;}
     if(a==="quick-details"){const text=entrada.state(id).text,name=text.trim().includes("\n")?"":text.trim();detailedDraft=name?{key:id,text}:null;needForm(null,"",name,optionsFor(id).listIds);return;}
     if(a==="open-list"){showList(id);return;}if(a==="add-benefit"||a==="edit-benefit"){benefitForm(id);return;}
+    if(a==="personalize"){personalizeList(id);return;}
     if(a==="new-list"){listNameForm("new");return;}
     if(a==="rename"){listNameForm("rename",id);return;}
     if(a==="duplicate"){listNameForm("duplicate",id);return;}
@@ -171,14 +229,21 @@ export function iniciarListas({db,getData,categorias}) {
   for(const element of [root,body])element.addEventListener("change",e=>{
     if(e.target.matches("[data-quick-list]")){const key=e.target.dataset.quickList;quickSelections.set(key,[...body.querySelectorAll("[data-quick-list]:checked")].filter(x=>x.dataset.quickList===key).map(x=>x.value));}
     if(e.target.matches("[data-shopping-toggle]"))run(()=>repo.completar(e.target.dataset.shoppingToggle,e.target.checked));
-    if(e.target.matches("[data-shopping-sort]")){sort=e.target.value;render();}
+    if(e.target.matches("[data-shopping-sort]")){sort=e.target.value;guardarPreferencias("listas",context,{sort,cards:cardPrefs});render();}
     if(e.target.matches("[data-shopping-loose]")){onlyLoose=e.target.checked;render();}
     if(e.target.matches("[data-shopping-date]")){shoppingDate=e.target.value||shoppingDate;if(dialog?.kind==="list")showList(dialog.id);else if(dialog?.kind==="quote")open("quote",`<h2>Comparar todos los faltantes</h2>${quoteHtml(needs.filter(pendiente))}`);}
   });
   body.addEventListener("submit",e=>{const form=e.target.closest("[data-shopping-form]");if(!form)return;e.preventDefault();const f=new FormData(form),d=Object.fromEntries(f.entries()),id=form.dataset.id||null;
+    if(form.dataset.shoppingForm==="list-preferences"){
+      if(!activeLists().some(l=>l.id===id)){dialogError("Esta lista ya no está activa.");return;}
+      const cards={...cardPrefs,[id]:{color:d.color,pinned:f.has("pinned")}};
+      if(!guardarPreferencias("listas",context,{sort,cards})){dialogError("Este navegador no pudo guardar tus preferencias.");return;}
+      cardPrefs=cards;
+      showList(id);render();return;
+    }
     if(form.dataset.shoppingForm==="list-name"){const op=form.dataset.operation,returnKey=dialog?.returnKey;run(()=>op==="new"?repo.crearLista(d.name):op==="rename"?repo.renombrar(id,d.name):repo.duplicar(id,d.name),newId=>{if(newId)expanded.add(newId);if(returnKey&&newId){quickSelections.set(returnKey,[...(quickSelections.get(returnKey)||[]),newId]);quickForm("",returnKey);}else{overlay.style.display="none";dialog=null;mode="active";}});return;}
     if(form.dataset.shoppingForm==="need"){d.listIds=f.getAll("listIds");const product=catalog.find(p=>p.key===normalizar(d.name));if(!d.unit&&d.quantity)d.unit=product?.unit||"unidad";if(!d.category&&product)d.category=product.category;
-      run(()=>repo.guardarNecesidad(d,id,d.newListName||""),()=>{if(detailedDraft&&entrada.state(detailedDraft.key).text===detailedDraft.text)entrada.setText(detailedDraft.key,"");detailedDraft=null;overlay.style.display="none";dialog=null;});}
+      run(()=>guardarProducto(repo,d,id,d.newListName||""),result=>{if(result===false)return;if(detailedDraft&&entrada.state(detailedDraft.key).text===detailedDraft.text)entrada.setText(detailedDraft.key,"");detailedDraft=null;overlay.style.display="none";dialog=null;});}
     else{d.weekdays=f.getAll("weekdays").map(Number);d.disabled=f.has("disabled");run(()=>repo.guardarBeneficio(d,id),()=>{overlay.style.display="none";dialog=null;});}
   });
   fab.addEventListener("click",()=>{if(usable())quickForm();});
@@ -189,9 +254,17 @@ export function iniciarListas({db,getData,categorias}) {
     open("receipt",`<h2>¿Compraste estos productos?</h2><p>Encontramos coincidencias en el ticket de ${esc(next.storeName)}. Confirmá cuáles cubren tus faltantes.</p>${found.map(m=>`<label class="shopping-check shopping-receipt-row"><input name="receiptNeed" type="checkbox" value="${esc(m.need.id)}" ${m.score===1&&m.comparable?"checked":""}><span><strong>${esc(m.need.name)}</strong><br>${m.lines.map(l=>esc(l.name)).join(", ")}<br>${m.comparable?`${number(m.quantity)} ${esc(m.unit)}`:"Cantidad no comparable: tildalo solo si cubre todo el pendiente."}${m.score<1?" · Coincidencia aproximada: revisar":""}</span></label>`).join("")}${errorHtml}<div class="modal-actions">${action("receipt-confirm","Confirmar productos comprados","","btn-primary")}</div>`);
   }
   function cambiarEspacio(next){unsubs.forEach(f=>f());unsubs=[];entrada.reset();expanded=new Set();quickSelections=new Map();detailedDraft=null;context=next?{...next}:null;needs=[];lists=[];promos=[];catalog=[];queue=[];ready=new Set();error="";dialog=null;receipt=null;overlay.style.display="none";repo=null;
+    if(duplicateDialog.open)duplicateDialog.close("");
+    recentNeeds.clear();
+    const prefs=leerPreferencias("listas",context);
+    sort=prefs.sort==="category"?"category":"manual";
+    cardPrefs=prefs.cards&&typeof prefs.cards==="object"?prefs.cards:{};
     if(context){const scope={...context};repo=crearRepositorioListas(db,firestore,scope);
       for(const type of ["shopping_needs","shopping_lists","shopping_promotions"])unsubs.push(firestore.onSnapshot(repo.col(type),{includeMetadataChanges:true},snap=>{
-        if(!scopeSame(scope))return;const data=snap.docs.map(d=>({id:d.id,...d.data()}));if(type==="shopping_needs")needs=data;else if(type==="shopping_lists")lists=data;else promos=data;
+        if(!scopeSame(scope))return;const data=snap.docs.map(d=>({id:d.id,...d.data()}));if(type==="shopping_needs"){
+          needs=data;
+          for(const n of needs)recentNeeds.delete(n.id);
+        }else if(type==="shopping_lists")lists=data;else promos=data;
         if(!snap.metadata.fromCache)ready.add(type);render();
       },err=>{if(!scopeSame(scope))return;error="No se pudieron sincronizar las listas. Revisá tu conexión y el acceso a este espacio.";console.error(err);render();}));}
     render();

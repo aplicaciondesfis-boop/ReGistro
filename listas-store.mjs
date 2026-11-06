@@ -9,7 +9,7 @@ export function crearRepositorioListas(db,api,scope) {
   const clean=n=>Object.fromEntries(["name","brand","category","note","quantity","unit","done","cancelled","fulfilled","receiptLinks"].map(k=>[k,n[k]??null]));
   function nombreLista(name){name=String(name||"").trim();if(!name||name.length>100)throw Error("Escribí un nombre de lista de hasta 100 caracteres.");return name;}
 
-  async function guardarNecesidad(input,id=null,newListName="") {
+  async function guardarNecesidad(input,id=null,newListName="",reutilizar=false) {
     const data=validarNecesidad(input), keyRef=ref("shopping_keys",claveNecesidad(data)), generated=ref("shopping_needs");
     const nuevaLista=newListName.trim()?{ref:ref("shopping_lists"),name:nombreLista(newListName)}:null;
     if(nuevaLista)data.listIds.push(nuevaLista.ref.id);
@@ -20,20 +20,26 @@ export function crearRepositorioListas(db,api,scope) {
       const old=dato(await tx.get(needRef));
       if(id&&(!old||old.done||old.cancelled))throw Error("El faltante cambió. Cerrá la ventana y revisá su estado.");
       if(id&&key?.activeNeedId&&key.activeNeedId!==id)throw Error("Ya existe otro faltante con ese nombre y marca.");
-      const merge=!id&&old&&!old.done&&!old.cancelled;
+      if(reutilizar&&claveNecesidad(old)!==claveNecesidad(data))throw Error("El producto sugerido cambió. Volvé a revisar los faltantes.");
+      const merge=reutilizar||!id&&old&&!old.done&&!old.cancelled;
       const next=merge?{...clean(old),listIds:[...new Set([...(old.listIds||[]),...data.listIds])]}:{...data,done:false,cancelled:false,fulfilled:old?.fulfilled||0,receiptLinks:old?.receiptLinks||[]};
+      if(next.listIds.length>30)throw Error("Un producto puede estar en hasta 30 listas.");
       const oldKey=old?ref("shopping_keys",claveNecesidad(old)):null;
       if(oldKey&&oldKey.id!==keyRef.id)await tx.get(oldKey);
       const ids=[...new Set([...(old?.listIds||[]),...next.listIds])];
       const lists=await Promise.all(ids.filter(x=>x!==nuevaLista?.ref.id).map(async x=>({ref:ref("shopping_lists",x),data:dato(await tx.get(ref("shopping_lists",x)))})));
-      if(lists.some(l=>next.listIds.includes(l.ref.id)&&l.data?.status!=="active"))throw Error("Una de las listas ya está finalizada o no existe.");
+      if(lists.some(l=>data.listIds.includes(l.ref.id)&&l.data?.status!=="active"))throw Error("Una de las listas ya está finalizada o no existe.");
       tx.set(needRef,{...next,order:old?.order??Date.now(),...(old?{}:nuevo()),...meta()},{merge:true});
       tx.set(keyRef,{activeNeedId:needRef.id,...meta()});
       if(oldKey&&oldKey.id!==keyRef.id)tx.set(oldKey,{activeNeedId:null,...meta()});
       for(const l of lists){if(l.data?.status!=="active")continue;let order=(l.data.needIds||[]).filter(x=>x!==needRef.id);if(next.listIds.includes(l.ref.id))order=(l.data.needIds||[]).includes(needRef.id)?l.data.needIds:[...order,needRef.id];tx.update(l.ref,{needIds:order,...meta()});}
       if(nuevaLista)tx.set(nuevaLista.ref,{name:nuevaLista.name,status:"active",needIds:[needRef.id],...nuevo()});
-      return {id:needRef.id,merged:!!merge};
+      return {id:needRef.id,merged:!!merge,need:{id:needRef.id,...next}};
     });
+  }
+
+  function usarNecesidad(need,listIds,newListName) {
+    return guardarNecesidad({name:need.name,brand:need.brand,listIds},need.id,newListName,true);
   }
 
   async function completar(id,done,cancelled=false) {
@@ -112,5 +118,5 @@ export function crearRepositorioListas(db,api,scope) {
     const value={store:store.slice(0,120),name:name.slice(0,120),type:d.type==="cashback"?"cashback":"discount",percent,weekdays:(d.weekdays||[]).filter(x=>Number.isInteger(x)&&x>=0&&x<=6),paymentMethod:String(d.paymentMethod||"").slice(0,120),note:String(d.note||"").slice(0,500),disabled:!!d.disabled,...meta()};
     if(id)await api.updateDoc(ref("shopping_promotions",id),value);else await api.setDoc(ref("shopping_promotions"),{...value,...nuevo()});
   }
-  return {col,guardarNecesidad,completar,crearLista,renombrar,mover,archivar,duplicar,aplicarTicket,guardarBeneficio};
+  return {col,guardarNecesidad,usarNecesidad,completar,crearLista,renombrar,mover,archivar,duplicar,aplicarTicket,guardarBeneficio};
 }
