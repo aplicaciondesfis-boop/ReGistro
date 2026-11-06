@@ -37,8 +37,51 @@ test("las compras parciales enlazadas no duplican cantidades al procesar de nuev
   await m.repo.aplicarTicket({id:"p"},[match]);await m.repo.aplicarTicket({id:"p"},[match]);assert.equal(m.records("shopping_needs")[0].fulfilled,.5);
   await m.repo.aplicarTicket({id:"p2"},[{...match,quantity:1.5}]);assert.equal(m.records("shopping_needs")[0].done,true);
 });
-test("descartar es reversible",async()=>{
-  const m=memoria(),n=await m.repo.guardarNecesidad({name:"Papa"});await m.repo.completar(n.id,false,true);assert.equal(m.records("shopping_needs")[0].cancelled,true);await m.repo.completar(n.id,false);assert.equal(m.records("shopping_needs")[0].cancelled,false);
+test("borrar solo el producto elegido es reversible y conserva las compras parciales",async()=>{
+  const m=memoria(),a=await m.repo.crearLista("Mensual"),b=await m.repo.crearLista("Despensa");
+  const n=await m.repo.guardarNecesidad({name:"Aceite",quantity:2,unit:"l",listIds:[a,b]});
+  const otro=await m.repo.guardarNecesidad({name:"Aceite de girasol",listIds:[a]});
+  const match={need:{id:n.id},quantity:.5,unit:"l",comparable:true,lines:[{id:"linea"}]};
+  await m.repo.aplicarTicket({id:"p"},[match]);
+  const necesidad=()=>m.records("shopping_needs").find(item=>item.id===n.id);
+  const links=necesidad().receiptLinks;
+
+  await m.repo.completar(n.id,false,true);
+  assert.equal(necesidad().cancelled,true);
+  assert.equal(necesidad().done,false);
+  assert.equal(m.records("shopping_needs").find(item=>item.id===otro.id).cancelled,false);
+  await assert.rejects(m.repo.completar(n.id,true),/se borró/);
+
+  await m.repo.completar(n.id,false);
+  assert.equal(necesidad().cancelled,false);
+  assert.equal(necesidad().fulfilled,.5);
+  assert.deepEqual(necesidad().receiptLinks,links);
+  assert.deepEqual(necesidad().listIds,[a,b]);
+});
+
+test("repetir el borrado no libera la clave de un pendiente nuevo",async()=>{
+  const m=memoria(),borrado=await m.repo.guardarNecesidad({name:"Aceite"});
+  await m.repo.completar(borrado.id,false,true);
+  const nuevo=await m.repo.guardarNecesidad({name:"Aceite"});
+  assert.notEqual(nuevo.id,borrado.id);
+  await m.repo.completar(borrado.id,false,true);
+  await assert.rejects(m.repo.completar(borrado.id,false),/otro pendiente/);
+  assert.equal((await m.repo.guardarNecesidad({name:"Aceite"})).id,nuevo.id);
+});
+
+test("borrar un faltante evita que reaparezca al reutilizar la lista",async()=>{
+  const m=memoria(),l=await m.repo.crearLista("Compra del mes");
+  const n=await m.repo.guardarNecesidad({name:"Aceite",listIds:[l]});
+  const otro=await m.repo.guardarNecesidad({name:"Aceite de girasol",listIds:[l]});
+  await m.repo.completar(n.id,false,true);
+  const duplicada=await m.repo.duplicar(l,"Duplicada");
+  await m.repo.archivar(l,[]);
+  const archivada=m.records("shopping_lists").find(item=>item.id===l);
+  assert.deepEqual(archivada.snapshot.needs.map(item=>item.name),["Aceite de girasol"]);
+  const reutilizada=await m.repo.duplicar(l,"Reutilizada");
+  for(const lista of m.records("shopping_lists").filter(item=>[duplicada,reutilizada].includes(item.id))){
+    assert.deepEqual(lista.needIds,[otro.id]);
+  }
 });
 test("las mismas necesidades personales se guardan separadas por propietario y del hogar",async()=>{
   const m=memoria();

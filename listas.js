@@ -1,6 +1,6 @@
 import * as firestore from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
 import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=12";
-import {crearRepositorioListas} from "./listas-store.mjs?v=12";
+import {crearRepositorioListas} from "./listas-store.mjs?v=15";
 import {crearEntradaRapida} from "./listas-entrada.mjs?v=12";
 
 export function iniciarListas({db,getData,categorias}) {
@@ -42,7 +42,7 @@ export function iniciarListas({db,getData,categorias}) {
         <label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}" ${n.done?"checked":""} ${history||n.cancelled?"disabled":""}><span>${esc(n.name)}</span></label>
         <div class="shopping-item-meta">${n.quantity!=null?`${number(n.fulfilled||0)} / ${number(n.quantity)} ${esc(n.unit||"unidad")} · `:""}${esc(n.brand||"")}${n.note?" · "+esc(n.note):""}
           ${names.length?`<div>${names.map(name=>`<span class="shopping-tag">${esc(name)}</span>`).join(" ")}</div>`:""}
-          ${n.cancelled?"Descartado":best?`<div>${money(best.price)}/${esc(line.unit)} · ${esc(best.store)} · ${date(best.date)}</div>`:n.done?"Comprado":"<div>Sin precio comparable registrado</div>"}
+          ${n.cancelled?"Borrado":best?`<div>${money(best.price)}/${esc(line.unit)} · ${esc(best.store)} · ${date(best.date)}</div>`:n.done?"Comprado":"<div>Sin precio comparable registrado</div>"}
         </div>
         ${!history&&n.cancelled?`<div>${action("restore","Recuperar",n.id)}</div>`:!history&&!n.done?`<div class="shopping-row-actions" data-shopping-list="${esc(listId)}">${action("edit-need",compact?"Detalles":"Detalles / listas",n.id)}${sort==="manual"?`${action("up","↑",n.id)}${action("down","↓",n.id)}`:""}</div>`:""}
       </li>`;
@@ -90,7 +90,7 @@ export function iniciarListas({db,getData,categorias}) {
       <div class="chips">${action("view-active","Faltantes y listas","","chip "+(mode==="active"?"active":""))}${action("view-history","Historial","","chip "+(mode==="history"?"active":""))}${action("view-benefits","Beneficios","","chip "+(mode==="benefits"?"active":""))}</div>
       ${mode==="active"?`<div class="shopping-toolbar"><label class="check-repetidos"><input type="checkbox" data-shopping-loose ${onlyLoose?"checked":""}> Solo productos sueltos</label><label class="card-meta">Orden <select class="filtro-select" data-shopping-sort><option value="manual" ${sort==="manual"?"selected":""}>Manual</option><option value="category" ${sort==="category"?"selected":""}>Por categoría</option></select></label>${action("compare-all","Comparar precios")}</div>
         <div class="shopping-notes-grid">${card()}${onlyLoose?"":activeLists().map(l=>card(l)).join("")}</div>`:
-      mode==="history"?`<h2>Listas finalizadas</h2>${cards(lists.filter(l=>l.status==="completed").sort((a,b)=>(+fechaDato(b.closedAt)||0)-(+fechaDato(a.closedAt)||0)),true)}<h3>Comprados o descartados recientes</h3>${rows(needs.filter(n=>n.done||n.cancelled).sort((a,b)=>(+fechaDato(b.updatedAt)||0)-(+fechaDato(a.updatedAt)||0)).slice(0,20))}`:
+      mode==="history"?`<h2>Listas finalizadas</h2>${cards(lists.filter(l=>l.status==="completed").sort((a,b)=>(+fechaDato(b.closedAt)||0)-(+fechaDato(a.closedAt)||0)),true)}<h3>Comprados o borrados recientes</h3>${rows(needs.filter(n=>n.done||n.cancelled).sort((a,b)=>(+fechaDato(b.updatedAt)||0)-(+fechaDato(a.updatedAt)||0)).slice(0,20))}`:
       `<div class="shopping-toolbar"><h2>Descuentos y reintegros posibles</h2>${action("add-benefit","Anotar beneficio","","btn-primary")}</div><p class="card-meta">Guardá condiciones conocidas: días, comercio y medio de pago. Se muestran por separado en las recomendaciones.</p>${promos.map(p=>`<article class="card-grafico">${benefitHtml(p)}${action("edit-benefit","Editar",p.id)}</article>`).join("")||'<div class="vacio">Todavía no anotaste beneficios.</div>'}`}`;
     if(dialog?.kind==="list")showList(dialog.id);
     for(const e of root.querySelectorAll("[data-card-scroll]"))e.scrollTop=scrolls.get(e.dataset.cardScroll)||0;
@@ -116,7 +116,8 @@ export function iniciarListas({db,getData,categorias}) {
     const n=needs.find(x=>x.id===id)||{name:initialName},selected=n.listIds||initialLists||[listId].filter(Boolean),names=[...new Set(catalog.map(p=>p.name))].sort();
     const reference=id?cotizar([n],catalog).lines[0]:null,best=reference?.best;
     const priceInfo=id?`<p class="aviso shopping-detail-price">${best?`Último precio de referencia: <strong>${money(best.price)}/${esc(reference.unit)}</strong><br>${esc(best.store)} · ${date(best.date)}`:"Sin precio comparable registrado"}</p>`:"";
-    open("need",`<h2>${id?"Editar faltante":"Anotar producto"}</h2>${priceInfo}<form data-shopping-form="need" data-id="${esc(id||"")}">
+    const remove=id?`<details><summary>Borrar producto</summary><div class="aviso aviso-warn"><p><strong>${esc(n.name)}</strong> se quitará de todas las listas donde esté anotado. Podés recuperarlo desde Historial.</p>${action("discard","Confirmar borrado",id,"btn-secondary btn-peligro")}</div></details>`:"";
+    open("need",`<h2>${id?"Editar faltante":"Anotar producto"}</h2>${remove}${errorHtml}${priceInfo}<form data-shopping-form="need" data-id="${esc(id||"")}">
       <label class="form-label">Producto<input name="name" class="form-input" required maxlength="120" list="shoppingProducts" value="${esc(n.name||"")}" placeholder="Ej: queso cremoso"></label><datalist id="shoppingProducts">${names.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist>
       <details ${n.quantity!=null||n.note||n.brand?"open":""}><summary>Agregar detalles</summary><div class="correction-grid">
         <label class="form-label">Cantidad prevista (opcional)<input name="quantity" type="number" step="any" min="0.000001" class="form-input" value="${n.quantity??""}"></label>
@@ -125,9 +126,10 @@ export function iniciarListas({db,getData,categorias}) {
         <label class="form-label">Categoría<select name="category" class="form-select"><option value="">Según el producto</option>${categorias.map(c=>`<option ${n.category===c?"selected":""}>${esc(c)}</option>`).join("")}</select></label>
       </div><label class="form-label">Nota<textarea name="note" class="form-input" maxlength="500">${esc(n.note||"")}</textarea></label></details>
       <fieldset class="correction-fields"><legend>Incluir en listas (opcional)</legend>${activeLists().map(l=>`<label class="shopping-check"><input type="checkbox" name="listIds" value="${esc(l.id)}" ${selected.includes(l.id)?"checked":""}>${esc(l.name)}</label>`).join("")||'<p class="card-meta">Podés guardarlo como producto suelto.</p>'}</fieldset>
-      <details><summary>Crear una lista en este momento</summary><label class="form-label">Nombre de la nueva lista<input name="newListName" class="form-input" maxlength="100" placeholder="Ej: Compra de noviembre"></label></details>${errorHtml}
-      <div class="modal-actions">${id?action("discard","Descartar faltante",id,"btn-secondary"):""}<button class="btn-primary">Guardar producto</button></div></form>`,id||"");
-    body.querySelector('[name="name"]').focus();
+       <details><summary>Crear una lista en este momento</summary><label class="form-label">Nombre de la nueva lista<input name="newListName" class="form-input" maxlength="100" placeholder="Ej: Compra de noviembre"></label></details>
+       <div class="modal-actions"><button class="btn-primary">Guardar producto</button></div></form>`,id||"");
+    body.scrollTop=0;
+    body.querySelector('[name="name"]').focus({preventScroll:true});
   }
   function showList(id){const l=lists.find(x=>x.id===id);if(!l)return;const ns=needs.filter(n=>(l.needIds||[]).includes(n.id)&&!n.cancelled);
     open("list",`<h2>${esc(l.name)}</h2><div class="shopping-toolbar">${action("add-to-list","＋ Agregar producto",id,"btn-primary")}${action("rename","Renombrar",id)}${action("duplicate","Reutilizar",id)}${action("archive","Finalizar y guardar historial",id)}</div><label class="form-label">Orden<select class="filtro-select" data-shopping-sort><option value="manual" ${sort==="manual"?"selected":""}>Manual</option><option value="category" ${sort==="category"?"selected":""}>Categoría</option></select></label>${rows(ns,id)}<details open><summary>Comparación de precios</summary>${quoteHtml(ns)}</details>${errorHtml}`,id);}
@@ -151,7 +153,10 @@ export function iniciarListas({db,getData,categorias}) {
     if(a==="rename"){listNameForm("rename",id);return;}
     if(a==="duplicate"){listNameForm("duplicate",id);return;}
     if(a==="archive"){if(confirm("¿Finalizar esta lista y conservarla en el historial? Los productos pendientes seguirán en Faltantes."))await run(()=>repo.archivar(id,catalog),()=>{overlay.style.display="none";dialog=null;});return;}
-    if(a==="discard"){if(confirm("¿Descartar este faltante de todas sus listas? Se conserva en el historial."))await run(()=>repo.completar(id,false,true),()=>{overlay.style.display="none";dialog=null;});return;}
+    if(a==="discard"){
+      await run(()=>repo.completar(id,false,true),()=>{overlay.style.display="none";dialog=null;});
+      return;
+    }
     if(a==="restore"){await run(()=>repo.completar(id,false));return;}
     if(a==="up"||a==="down"){const listId=b.closest("[data-shopping-list]")?.dataset.shoppingList||"",list=lists.find(l=>l.id===listId);const ns=list?needs.filter(n=>(list.needIds||[]).includes(n.id)&&pendiente(n)):needs.filter(n=>pendiente(n)&&isLoose(n));await run(()=>repo.mover(list?.id,id,a==="up"?-1:1,ordered(ns,list).map(n=>n.id)));return;}
     if(a==="compare-all"||a==="compare-loose"){open("quote",`<h2>${a==="compare-all"?"Comparar todos los faltantes":"Comparar productos sueltos"}</h2>${quoteHtml(needs.filter(n=>pendiente(n)&&(a==="compare-all"||isLoose(n))))}`);return;}
