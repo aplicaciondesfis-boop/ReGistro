@@ -40,9 +40,22 @@ export function crearRepositorioListas(db,api,scope) {
     return api.runTransaction(db,async tx=>{
       const r=ref("shopping_needs",id), n=dato(await tx.get(r));if(!n)throw Error("El producto ya no existe.");
       const k=ref("shopping_keys",claveNecesidad(n)), key=dato(await tx.get(k));
-      if(!done&&!cancelled&&key?.activeNeedId&&key.activeNeedId!==id)throw Error("Ya hay otro pendiente de este producto. Usá el pendiente actual.");
-      tx.update(r,{done,cancelled,fulfilled:done?(n.quantity??1):0,receiptLinks:done?(n.receiptLinks||[]):[],completedAt:done?api.serverTimestamp():null,completionSource:done?"manual":null,...meta()});
-      tx.set(k,{activeNeedId:done||cancelled?null:id,...meta()});
+      if(cancelled){
+        if(n.done)throw Error("El producto ya se marcó como comprado.");
+        if(n.cancelled)return;
+        tx.update(r,{cancelled:true,...meta()});
+        if(key?.activeNeedId===id)tx.set(k,{activeNeedId:null,...meta()});
+        return;
+      }
+      if(!done&&key?.activeNeedId&&key.activeNeedId!==id)throw Error("Ya hay otro pendiente de este producto. Usá el pendiente actual.");
+      if(n.cancelled){
+        if(done)throw Error("El producto se borró de la lista. Podés recuperarlo desde Historial.");
+        tx.update(r,{cancelled:false,...meta()});
+        tx.set(k,{activeNeedId:id,...meta()});
+        return;
+      }
+      tx.update(r,{done,cancelled:false,fulfilled:done?(n.quantity??1):0,receiptLinks:done?(n.receiptLinks||[]):[],completedAt:done?api.serverTimestamp():null,completionSource:done?"manual":null,...meta()});
+      if(!done||key?.activeNeedId===id)tx.set(k,{activeNeedId:done?null:id,...meta()});
     });
   }
 
@@ -60,7 +73,7 @@ export function crearRepositorioListas(db,api,scope) {
   async function archivar(id,catalog) {
     await api.runTransaction(db,async tx=>{
       const r=ref("shopping_lists",id),l=dato(await tx.get(r));if(l?.status!=="active")throw Error("La lista ya está finalizada.");
-      const ns=(await Promise.all((l.needIds||[]).map(x=>tx.get(ref("shopping_needs",x))))).map(dato).filter(Boolean);
+      const ns=(await Promise.all((l.needIds||[]).map(x=>tx.get(ref("shopping_needs",x))))).map(dato).filter(n=>n&&!n.cancelled);
       const quote=cotizar(ns.map(n=>({...n,done:false,fulfilled:0})),catalog);
       tx.update(r,{status:"completed",closedAt:api.serverTimestamp(),snapshot:{needs:ns.map(clean),estimate:{total:quote.best?.total??null,store:quote.best?.name??null,splitTotal:quote.splitTotal,known:quote.known,reference:quote.reference}},...meta()});
     });
@@ -70,7 +83,7 @@ export function crearRepositorioListas(db,api,scope) {
     const listRef=ref("shopping_lists"), name=nombreLista(providedName);
     await api.runTransaction(db,async tx=>{
       const original=dato(await tx.get(ref("shopping_lists",id)));if(!original)throw Error("La lista no existe.");
-      const source=original.snapshot?.needs||(await Promise.all((original.needIds||[]).map(x=>tx.get(ref("shopping_needs",x))))).map(dato).filter(Boolean);
+      const source=(original.snapshot?.needs||(await Promise.all((original.needIds||[]).map(x=>tx.get(ref("shopping_needs",x))))).map(dato)).filter(n=>n&&!n.cancelled);
       if(source.length>150)throw Error("Esta lista es muy grande para duplicarla de una vez (máximo 150 productos).");
       const keys=await Promise.all(source.map(async n=>({source:n,ref:ref("shopping_keys",claveNecesidad(n)),key:dato(await tx.get(ref("shopping_keys",claveNecesidad(n))))})));
       const targets=await Promise.all(keys.map(async k=>{const r=k.key?.activeNeedId?ref("shopping_needs",k.key.activeNeedId):ref("shopping_needs");return {...k,target:r,existing:k.key?.activeNeedId?dato(await tx.get(r)):null};}));
