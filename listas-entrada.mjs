@@ -1,4 +1,5 @@
-import {claveNecesidad,normalizar,pendiente,validarNecesidad} from "./compras.mjs?v=17";
+import {claveNecesidad,normalizar,pendiente,validarNecesidad} from "./compras.mjs?v=18";
+import {coincidenciaProducto,identificarProducto} from "./identidad-productos.mjs?v=18";
 
 export function posiblesDuplicados(input, needs) {
   const brand = normalizar(input.brand), key = claveNecesidad(input);
@@ -11,6 +12,9 @@ export function posiblesDuplicados(input, needs) {
   return activos.filter(n => {
     const otherBrand = normalizar(n.brand);
     if (brand && otherBrand && brand !== otherBrand) return false;
+    if(coincidenciaProducto(input.name,n.name)||coincidenciaProducto(n.name,input.name))return true;
+    const a=identificarProducto(input.name),b=identificarProducto(n.name);
+    if(a.familia&&a.familia===b.familia)return false;
     const existing = words(n.name);
     const [short, long] = requested.length <= existing.length ? [requested, existing] : [existing, requested];
     return short[0].length >= 3 && short.every((word, index) => word === long[index]);

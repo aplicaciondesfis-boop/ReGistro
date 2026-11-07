@@ -23,7 +23,8 @@ import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken as getAppChec
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
 import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs?v=12";
 import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "./productos.mjs?v=12";
-import { iniciarListas } from "./listas.js?v=17";
+import { iniciarListas } from "./listas.js?v=18";
+import { identificarProducto, EQUIVALENCIAS_PRODUCTOS } from "./identidad-productos.mjs?v=18";
 import { guardarPreferencias, leerPreferencias, periodosMensuales } from "./preferencias.mjs?v=16";
 
 // Configuración del proyecto aprovisionado en Firebase
@@ -96,7 +97,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "listas v17";
+versionTag.textContent = "productos v18";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 const shopping = iniciarListas({db,getData:()=>({purchases,items:purchaseItems,busy:!!actividadActual}),categorias:CATEGORIAS});
@@ -875,7 +876,7 @@ function agruparProductos() {
   purchaseItems.forEach(i => {
     const nombre = (i.canonicalProductName || "").trim();
     if (!nombre || nombre.toLowerCase() === "sin detalle") return;
-    const k = nombre.toLowerCase();
+    const k = identificarProducto(nombre).key;
     (grupos[k] = grupos[k] || []).push(i);
   });
   const compraDe = {};
@@ -890,7 +891,7 @@ function agruparProductos() {
     const precios = items.filter(i => (i.presentationUnit || "unidad") === unidad).map(i => precioNormalizadoProducto(i) * factorReintegro(i.purchaseId)).filter(x => x > 0);
     return {
       id: k,
-      nombre: items[0].canonicalProductName,
+      nombre: identificarProducto(items[0].canonicalProductName).nombre,
       items, tiendas, unidad, compraDe,
       compras: new Set(items.map(i => i.purchaseId)).size,
       min: precios.length ? Math.min(...precios) : 0,
@@ -914,7 +915,7 @@ function detalleProducto(g) {
     return `<tr class="${mejor !== null && pr === mejor && (i.presentationUnit || "unidad") === g.unidad ? "mejor" : ""}">
       <td>${fechaCorta(aFecha(p.date))}<div class="correction-mobile"><button class="btn-chico" onclick="window.editarProducto('${i.id}')">✎ Corregir</button></div></td>
       <td>${esc(p.storeName || "—")}</td>
-      <td class="hide-sm">${esc(i.brand || i.rawDescription || "—")}</td>
+      <td class="hide-sm">${esc(i.brand || i.rawDescription || "—")}${i.canonicalProductName!==g.nombre?`<div class="suave">${esc(i.canonicalProductName)}</div>`:""}</td>
       <td class="hide-sm">${i.presentationValue ? numEs(i.presentationValue, 3) + " " + esc(i.presentationUnit || "") : "—"}</td>
       <td class="num">${numEs(i.quantity || 1, 3)}</td>
       <td class="num hide-sm">${pagado}</td>
@@ -936,10 +937,13 @@ function renderProductos() {
 
   document.getElementById("productosResumen").textContent =
     `${todos.length} productos distintos · ${purchaseItems.length} líneas de compra · ${purchases.length} tickets`;
+  document.getElementById("productosEquivalencias").innerHTML = EQUIVALENCIAS_PRODUCTOS.map(g =>
+    `<p><strong>${esc(g.nombre)}</strong> · ${g.nombres.map(esc).join(", ")}</p>`
+  ).join("") + '<p>Fibra, integral y leudante conservan su variedad. En las listas, Fideos y Queso untable aceptan sus variedades. Si elegís una variedad o marca concreta, se respeta esa elección.</p>';
 
   const filas = todos.filter(g =>
     (!soloRepetidos || g.compras >= 2) &&
-    (!busqueda || g.items.some(i => `${i.canonicalProductName} ${i.brand || ""} ${i.rawDescription || ""}`.toLowerCase().includes(busqueda)))
+    (!busqueda || g.nombre.toLowerCase().includes(busqueda) || g.items.some(i => `${i.canonicalProductName} ${i.brand || ""} ${i.rawDescription || ""}`.toLowerCase().includes(busqueda)))
   );
 
   // El selector de orden refleja el orden actual
@@ -1992,7 +1996,8 @@ Extraé rigurosamente los datos respetando estas reglas:
 - Higiene personal: papel higiénico, shampoo, jabón de tocador, crema dental, toallitas, pañuelos descartables.
 - Hogar: bolsas, papel de cocina, utensilios, lámparas, fósforos y artículos del hogar.
 - Sin detalle: líneas genéricas como 'ALMACEN' o 'VENTAS VARIAS' o productos que no podés identificar.
-13. receiptType: el tipo de comprobante tal cual figura impreso (por ejemplo 'Factura B' o 'Ticket'). Si no se lee, dejalo vacío.`;
+13. receiptType: el tipo de comprobante tal cual figura impreso (por ejemplo 'Factura B' o 'Ticket'). Si no se lee, dejalo vacío.
+14. canonicalName identifica producto y variedad, sin marca ni tamaño del paquete. Guardá marca en brand y tamaño en presentationValue/presentationUnit. Conservá en rawDescription el texto original. Indicá la variedad que se lee (harina 000/0000, leudante, integral, con fibra o con levadura; tipo de fideos; queso untable light). La app aplicará sus equivalencias. Si falta la variedad, no la deduzcas.`;
 
 // Si el modelo principal está saturado ("high demand"), se prueba con los siguientes
 const MODELOS_TICKET = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
