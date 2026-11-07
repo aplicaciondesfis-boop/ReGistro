@@ -14,6 +14,36 @@ test("usa el último precio por comercio, sin descontar cashback",()=>{
   const c=crearCatalogo([purchase("a","Tienda A","2026-10-01",1000),purchase("b","Tienda A","2026-11-01",1200,240)], [item("a","a","Papa",1000),item("b","b","Papa",1200)]);
   assert.equal(c.length,1);assert.equal(c[0].price,1200);assert.equal(c[0].cashback,240);
 });
+
+test("el promedio toma un último precio por comercio y no descuenta reintegros",()=>{
+  const c=crearCatalogo([
+    purchase("a","Tienda A","2026-10-01",1000),
+    purchase("b","Tienda A","2026-11-01",1200,240),
+    purchase("c","Tienda B","2026-11-02",1800)
+  ],[item("a","a","Papa",1000),item("b","b","Papa",1200),item("c","c","Papa",1800)]);
+  const q=cotizar([{name:"Papa"}],c);
+  assert.equal(q.lines[0].averagePrice,1500);
+  assert.equal(q.lines[0].estimatedTotal,1500);
+  assert.equal(q.averageTotal,1500);
+  assert.equal(q.known,1);
+});
+
+test("el total promedio usa cantidades pendientes y conserva los precios faltantes como desconocidos",()=>{
+  const c=[
+    {key:"queso",unit:"kg",storeKey:"a",store:"A",price:10000,date:"2026-11-01"},
+    {key:"queso",unit:"kg",storeKey:"b",store:"B",price:12000,date:"2026-11-01"},
+    {key:"leche",unit:"l",storeKey:"a",store:"A",price:2000,date:"2026-11-01"}
+  ];
+  const q=cotizar([{name:"Queso",quantity:1,unit:"kg",fulfilled:.5},{name:"Leche"},{name:"Pan"},{name:"Queso",done:true}],c);
+  assert.equal(q.lines[0].averagePrice,11000);
+  assert.equal(q.lines[0].estimatedTotal,5500);
+  assert.equal(q.lines[1].amount,1);
+  assert.equal(q.lines[2].averagePrice,null);
+  assert.equal(q.lines[2].estimatedTotal,null);
+  assert.equal(q.averageTotal,7500);
+  assert.equal(q.known,2);
+  assert.equal(q.lines.length,3);
+});
 test("prorratea descuentos generales y combina líneas del mismo producto en un ticket",()=>{
   const c=crearCatalogo([purchase("p","Tienda","2026-11-01",800)], [item("a","p","Papa",1000),item("b","p","Papa",0)]);
   assert.equal(c[0].price,400);
