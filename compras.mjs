@@ -1,3 +1,5 @@
+import {identificarProducto,coincidenciaProducto} from "./identidad-productos.mjs?v=18";
+
 export const normalizar = s => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const claveNecesidad = n => encodeURIComponent(normalizar(n.name) + "|" + normalizar(n.brand)).replace(/%/g, "_");
 export const fechaDato = valor => valor?.toDate ? valor.toDate() : valor instanceof Date ? valor : valor ? new Date(valor) : null;
@@ -26,7 +28,8 @@ export function crearCatalogo(purchases, items) {
     const p = compras.get(i.purchaseId);
     if (!p || p.status === "a_revisar" || i.isDoubtful) continue;
     const nombre = i.canonicalProductName || i.rawDescription;
-    const key = normalizar(nombre), storeKey = normalizar(p.storeName);
+    const identity = identificarProducto(nombre);
+    const key = identity.key, storeKey = normalizar(p.storeName);
     if (!key || key === "sin detalle" || !storeKey) continue;
     const suma = sumas.get(p.id), factor = suma > Number(p.totalPaid)+.02 && p.totalPaid > 0 ? p.totalPaid/suma : 1;
     const units=Number(i.quantity||1)*Number(i.presentationValue||1)*factorUnidad(i.presentationUnit);
@@ -34,7 +37,7 @@ export function crearCatalogo(purchases, items) {
     if(!(units>0)||!Number.isFinite(units)||cost<0||!Number.isFinite(cost))continue;
     const date = fechaDato(p.date) || fechaDato(p.createdAt);
     if (!date || !Number.isFinite(+date)) continue;
-    const record = { name:nombre, key, brand:i.brand||"", category:i.category||"Sin detalle", unit:unidadBase(i.presentationUnit), store:p.storeName, storeKey,
+    const record = { name:identity.nombre, key, brand:i.brand||"", category:i.category||"Sin detalle", unit:unidadBase(i.presentationUnit), store:p.storeName, storeKey,
       price:0, date:date.toISOString(), purchaseId:p.id, itemId:i.id||"", cashback:Number(p.cashbackAmount)||0, paymentMethod:p.paymentMethod||"" };
     const pk = [key,normalizar(i.brand),record.unit,storeKey].join("|");
     const ticketKey=p.id+"|"+pk, group=agrupados.get(ticketKey)||{record,pk,cost:0,units:0};group.cost+=cost;group.units+=units;agrupados.set(ticketKey,group);
@@ -45,7 +48,7 @@ export function crearCatalogo(purchases, items) {
 
 export function cotizar(needs,catalog) {
   const lines = needs.filter(pendiente).map(need => {
-    const posibles = catalog.filter(p => p.key === normalizar(need.name) && (!need.brand || normalizar(p.brand) === normalizar(need.brand)));
+    const posibles = catalog.filter(p => coincidenciaProducto(need.name,p.name||p.key)>0 && (!need.brand || normalizar(p.brand) === normalizar(need.brand)));
     const unidades = [...new Set(posibles.map(p=>p.unit))];
     const unit = need.unit || (unidades.length === 1 ? unidades[0] : "");
     const porTienda = new Map();
@@ -68,6 +71,10 @@ export function cotizar(needs,catalog) {
 }
 
 function semejanza(a,b) {
+  const coincidence = coincidenciaProducto(a,b);
+  if(coincidence)return coincidence;
+  const requested = identificarProducto(a), purchased = identificarProducto(b);
+  if(requested.familia && requested.familia === purchased.familia)return 0;
   a=normalizar(a);b=normalizar(b);
   if(a===b)return 1;
   const tokens=s=>s.split(" ").filter(x=>x.length>2).map(x=>x.endsWith("s")?x.slice(0,-1):x);

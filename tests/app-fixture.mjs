@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { numeroManual, buscarDuplicado, gruposPorTotal } from "../tickets.mjs";
 import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "../productos.mjs";
 import { guardarPreferencias, leerPreferencias, periodosMensuales } from "../preferencias.mjs";
+import { identificarProducto, EQUIVALENCIAS_PRODUCTOS } from "../identidad-productos.mjs";
 
 const source = (await readFile(new URL("../app.js", import.meta.url), "utf8")).replace(/^import[\s\S]*?;\r?\n/gm, "");
 
@@ -32,7 +33,7 @@ export function crearApp() {
   }
   function get(id) { if (!elementos.has(id)) elementos.set(id, elemento(id)); return elementos.get(id); }
   const context = vm.createContext({
-    console: { ...console, error() {} }, numeroManual, buscarDuplicado, gruposPorTotal, calcularCorreccionProducto, camposProducto, precioNormalizadoProducto,
+    console: { ...console, error() {} }, numeroManual, buscarDuplicado, gruposPorTotal, calcularCorreccionProducto, camposProducto, precioNormalizadoProducto, identificarProducto, EQUIVALENCIAS_PRODUCTOS,
     guardarPreferencias: (tipo, scope, value) => guardarPreferencias(tipo, scope, value, storage),
     leerPreferencias: (tipo, scope) => leerPreferencias(tipo, scope, storage), periodosMensuales,
     iniciarListas: () => ({cambiarEspacio(scope){espacios.push(scope);},actualizarCatalogo(){},ticketGuardado(ticket){notificados.push(ticket);},procesarPendientes(){}}),

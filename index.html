@@ -111,6 +111,10 @@
       <!-- PESTAÑA 3: PRODUCTOS (comparador de precios) -->
       <section id="tab-productos" class="tab-section" style="display: none;">
         <div id="productosResumen" class="muted" style="margin-bottom: 12px;"></div>
+        <details class="resumen-preferencias">
+          <summary>Cómo se reconocen los productos</summary>
+          <div id="productosEquivalencias" class="card-meta"></div>
+        </details>
         <div class="barra-herramientas">
           <input type="text" id="prodSearch" class="form-input" placeholder="🔍 Buscar producto o marca">
           <select id="prodOrden" class="filtro-select">
@@ -394,7 +398,7 @@
     </form>
   </dialog>
 
-  <script type="module" src="app.js?v=17"></script>
+  <script type="module" src="app.js?v=18"></script>
 
 </body>
 </html>
