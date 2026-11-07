@@ -1,12 +1,13 @@
 import * as firestore from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
-import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=12";
-import {crearRepositorioListas} from "./listas-store.mjs?v=16";
-import {crearEntradaRapida,posiblesDuplicados} from "./listas-entrada.mjs?v=16";
+import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=17";
+import {crearRepositorioListas} from "./listas-store.mjs?v=17";
+import {crearEntradaRapida,posiblesDuplicados} from "./listas-entrada.mjs?v=17";
 import {guardarPreferencias,leerPreferencias} from "./preferencias.mjs?v=16";
 
 export function iniciarListas({db,getData,categorias}) {
   const root=document.getElementById("shoppingApp"),fab=document.getElementById("shoppingFab"),overlay=document.getElementById("shoppingModal"),body=document.getElementById("shoppingModalBody");
   const duplicateDialog=document.getElementById("shoppingDuplicate");
+  const removeDialog=document.getElementById("shoppingRemove");
   const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const money=n=>"$ "+Number(n||0).toLocaleString("es-AR",{maximumFractionDigits:2});
   const date=d=>{const v=fechaDato(d);return v&&!isNaN(+v)?v.toLocaleDateString("es-AR"):"—";};
@@ -15,6 +16,7 @@ export function iniciarListas({db,getData,categorias}) {
   let shoppingDate=new Date().toLocaleDateString("en-CA");
   let expanded=new Set(),quickSelections=new Map(),detailedDraft=null;
   let cardPrefs={},resolverDuplicado=null;
+  let resolverBorrado=null;
   const recentNeeds=new Map();
   const colors=["Naranja","Verde","Azul","Violeta","Rosa"];
   const cardPref=id=>Object.hasOwn(cardPrefs,id)?cardPrefs[id]||{}:{};
@@ -38,6 +40,31 @@ export function iniciarListas({db,getData,categorias}) {
     resolverDuplicado=null;
   });
 
+  removeDialog.addEventListener("close",()=>{
+    resolverBorrado?.(removeDialog.returnValue==="delete");
+    resolverBorrado=null;
+  });
+
+  async function borrarProducto(id){
+    if(busy||entrada.isSaving()||!usable()){
+      dialogError("Esperá a que termine el guardado y se sincronicen las listas.");
+      return;
+    }
+    const need=needs.find(n=>n.id===id&&pendiente(n));
+    if(!need)return;
+    const target=repo;
+    removeDialog.returnValue="";
+    removeDialog.querySelector("#shoppingRemoveName").textContent=need.name;
+    const names=activeLists().filter(l=>(l.needIds||[]).includes(id)).map(l=>l.name);
+    removeDialog.querySelector("#shoppingRemoveScope").textContent=names.length
+      ? `Se quitará de ${names.map(name=>`«${name}»`).join(", ")}. Podés recuperarlo desde Historial.`
+      : "Se quitará de Productos a comprar. Podés recuperarlo desde Historial.";
+    removeDialog.showModal();
+    const accepted=await new Promise(resolve=>{resolverBorrado=resolve;});
+    if(!accepted||target!==repo)return;
+    await run(()=>target.completar(id,false,true),()=>{overlay.style.display="none";dialog=null;});
+  }
+
   async function guardarProducto(target,input,id=null,newListName=""){
     const candidates=id?[]:posiblesDuplicados(input,[...needs,...recentNeeds.values()]);
     const selectedLists=new Set(input.listIds||[]);
@@ -56,7 +83,7 @@ export function iniciarListas({db,getData,categorias}) {
     if(target===repo&&!needs.some(n=>n.id===result.id))recentNeeds.set(result.id,result.need);
     return result;
   }
-  const action=(name,label,id="",cls="btn-chico")=>`<button type="button" class="${cls}" data-shopping-action="${name}" data-id="${esc(id)}">${label}</button>`;
+  const action=(name,label,id="",cls="btn-chico")=>`<button type="button" class="${cls}" data-shopping-action="${name}" data-id="${esc(id)}" ${name==="discard"?`aria-label="Borrar ${esc(needs.find(n=>n.id===id)?.name||"producto")}" ${busy||entrada.isSaving()?"disabled":""}`:""}>${label}</button>`;
   const usable=()=>context&&ready.size===3&&!error;
   const dialogError=message=>{const e=body.querySelector("[data-shopping-error]");if(e&&overlay.style.display!=="none")e.textContent=message;else alert(message);};
   function close(){if(busy)return;overlay.style.display="none";dialog=null;processQueue();}
@@ -75,10 +102,14 @@ export function iniciarListas({db,getData,categorias}) {
   function rows(ns,listId="",history=false,compact=false) {
     const list=lists.find(l=>l.id===listId),items=ordered(ns,list);
     if(!items.length)return '<div class="vacio">Todavía no hay productos.</div>';
-    const quote=compact?null:cotizar(items,catalog);
+    const quote=cotizar(items,catalog);
     return `<ul class="shopping-items">${items.map((n,index)=>{
-      if(compact)return `<li class="shopping-item shopping-item-compact"><label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}"><span>${esc(n.name)}</span></label>${action("edit-need","Detalles",n.id)}</li>`;
       const line=quote.lines.find(l=>l.need.id===n.id),best=line?.best;
+      if(compact){
+        const price=line?.averagePrice==null?'<span class="shopping-item-budget is-missing">Sin precio</span>':
+          `<span class="shopping-item-budget"><strong>${money(line.averagePrice)}/${esc(line.unit)}</strong>${line.reference?'':`<small>${number(line.amount)} ${esc(line.unit)} · ${money(line.estimatedTotal)}</small>`}</span>`;
+        return `<li class="shopping-item shopping-item-compact"><label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}"><span>${esc(n.name)}</span></label>${price}<div class="shopping-item-actions">${action("edit-need","Detalles",n.id)}${action("discard","Borrar",n.id,"btn-chico btn-peligro")}</div></li>`;
+      }
       const names=(n.listIds||[]).map(id=>activeLists().find(l=>l.id===id)?.name).filter(Boolean);
       return `<li class="shopping-item ${n.done?"shopping-done":""}">
         <label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}" ${n.done?"checked":""} ${history||n.cancelled?"disabled":""}><span>${esc(n.name)}</span></label>
@@ -86,7 +117,7 @@ export function iniciarListas({db,getData,categorias}) {
           ${names.length?`<div>${names.map(name=>`<span class="shopping-tag">${esc(name)}</span>`).join(" ")}</div>`:""}
           ${n.cancelled?"Borrado":best?`<div>${money(best.price)}/${esc(line.unit)} · ${esc(best.store)} · ${date(best.date)}</div>`:n.done?"Comprado":"<div>Sin precio comparable registrado</div>"}
         </div>
-        ${!history&&n.cancelled?`<div>${action("restore","Recuperar",n.id)}</div>`:!history&&!n.done?`<div class="shopping-row-actions" data-shopping-list="${esc(listId)}">${action("edit-need",compact?"Detalles":"Detalles / listas",n.id)}${sort==="manual"?`${action("up","↑",n.id)}${action("down","↓",n.id)}`:""}</div>`:""}
+        ${!history&&n.cancelled?`<div>${action("restore","Recuperar",n.id)}</div>`:!history&&!n.done?`<div class="shopping-row-actions" data-shopping-list="${esc(listId)}">${action("edit-need",compact?"Detalles":"Detalles / listas",n.id)}${action("discard","Borrar",n.id,"btn-chico btn-peligro")}${sort==="manual"?`${action("up","↑",n.id)}${action("down","↓",n.id)}`:""}</div>`:""}
       </li>`;
     }).join("")}</ul>`;
   }
@@ -115,8 +146,12 @@ export function iniciarListas({db,getData,categorias}) {
     const key=l?l.id:"loose",opened=expanded.has(key),all=needs.filter(n=>!n.cancelled&&(l?(l.needIds||[]).includes(n.id):isLoose(n))),pending=ordered(all.filter(pendiente),l),done=all.filter(n=>n.done).length;
     const title=l?.name||"Productos a comprar",prefs=l?cardPref(l.id):{},customColor=colors.indexOf(prefs.color);
     const color=customColor>=0?customColor:l?1+[...l.id].reduce((v,c)=>v+c.charCodeAt(0),0)%4:0;
-    return `<article class="shopping-note shopping-note-${color} ${opened?"is-expanded":""}" data-shopping-card="${esc(key)}"><div class="shopping-note-head"><div><span class="shopping-note-kicker">${l?(prefs.pinned?"FIJADA":"MI LISTA"):"PRODUCTOS SUELTOS"}</span><h3>${esc(title)}</h3><p>${pending.length} pendiente${pending.length===1?"":"s"}${l?` · ${done} comprado${done===1?"":"s"}`:" · sin asignar a una lista"}</p></div><button type="button" class="shopping-expand" data-shopping-action="expand-card" data-id="${esc(key)}" aria-expanded="${opened}" aria-controls="shopping-card-${esc(key)}" aria-label="${opened?"Contraer":"Expandir"} ${esc(title)}">${opened?"−":"+"}</button></div>
-      <div id="shopping-card-${esc(key)}" class="shopping-note-content"><div class="shopping-note-products" data-card-scroll="${esc(key)}">${opened?rows(pending,l?.id||"",false,true):pending.length?`<ul class="shopping-preview">${pending.slice(0,3).map(n=>`<li><label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}"><span>${esc(n.name)}</span></label></li>`).join("")}</ul>${pending.length>3?`<p class="shopping-preview-more">Y ${pending.length-3} más…</p>`:""}`:'<p class="shopping-note-empty">Anotá acá lo que necesitás comprar.</p>'}</div>${opened?composer("card:"+key):""}</div>
+    const budget=cotizar(pending,catalog),partial=budget.known<budget.lines.length;
+    const totalLabel=budget.known||!pending.length?money(budget.averageTotal):"Sin precios";
+    const coverage=partial?`${budget.known} de ${pending.length} con precio`:'Todos los pendientes con precio';
+    return `<article class="shopping-note shopping-note-${color} ${opened?"is-expanded":""}" data-shopping-card="${esc(key)}"><div class="shopping-note-head"><div class="shopping-note-heading"><span class="shopping-note-kicker">${l?(prefs.pinned?"FIJADA":"MI LISTA"):"PRODUCTOS SUELTOS"}</span><div class="shopping-note-title"><h3>${esc(title)}</h3><span class="shopping-card-budget"><strong>${totalLabel}</strong><small>${partial?"Estimado parcial":"Estimado"}</small></span></div><p>${pending.length} pendiente${pending.length===1?"":"s"}${l?` · ${done} comprado${done===1?"":"s"}`:" · sin asignar a una lista"}</p>${pending.length?`<p class="shopping-budget-coverage">${coverage}</p>`:""}</div><button type="button" class="shopping-expand" data-shopping-action="expand-card" data-id="${esc(key)}" aria-expanded="${opened}" aria-controls="shopping-card-${esc(key)}" aria-label="${opened?"Contraer":"Expandir"} ${esc(title)}">${opened?"−":"+"}</button></div>
+      <div id="shopping-card-${esc(key)}" class="shopping-note-content"><div class="shopping-note-products" data-card-scroll="${esc(key)}">${opened?rows(pending,l?.id||"",false,true):pending.length?`<ul class="shopping-preview">${pending.slice(0,3).map(n=>`<li class="shopping-preview-row"><label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}"><span>${esc(n.name)}</span></label>${action("discard","Borrar",n.id,"btn-chico btn-peligro")}</li>`).join("")}</ul>${pending.length>3?`<p class="shopping-preview-more">Y ${pending.length-3} más…</p>`:""}`:'<p class="shopping-note-empty">Anotá acá lo que necesitás comprar.</p>'}</div>${opened?composer("card:"+key):""}</div>
+      ${opened&&pending.length?`<p class="shopping-budget-note">Promedio del último precio por comercio. ${budget.reference?"Sin cantidad, se estima 1 kg, 1 litro o 1 unidad.":"Se estima la cantidad pendiente."}</p>`:""}
       <div class="shopping-note-footer">${action("card-add","＋ Agregar productos",key,"shopping-text-button")}${l?action("open-list","Detalles y precios",l.id,"shopping-text-button"):action("compare-loose","Comparar precios","","shopping-text-button")}</div></article>`;
   }
   function rememberEditor(){const e=document.activeElement;return e?.matches("[data-quick-entry]")?{key:e.dataset.quickEntry,start:e.selectionStart,end:e.selectionEnd,length:e.value.length}:null;}
@@ -159,7 +194,7 @@ export function iniciarListas({db,getData,categorias}) {
     const n=needs.find(x=>x.id===id)||{name:initialName},selected=n.listIds||initialLists||[listId].filter(Boolean),names=[...new Set(catalog.map(p=>p.name))].sort();
     const reference=id?cotizar([n],catalog).lines[0]:null,best=reference?.best;
     const priceInfo=id?`<p class="aviso shopping-detail-price">${best?`Último precio de referencia: <strong>${money(best.price)}/${esc(reference.unit)}</strong><br>${esc(best.store)} · ${date(best.date)}`:"Sin precio comparable registrado"}</p>`:"";
-    const remove=id?`<details><summary>Borrar producto</summary><div class="aviso aviso-warn"><p><strong>${esc(n.name)}</strong> se quitará de todas las listas donde esté anotado. Podés recuperarlo desde Historial.</p>${action("discard","Confirmar borrado",id,"btn-secondary btn-peligro")}</div></details>`:"";
+    const remove=id?action("discard","Borrar producto",id,"btn-secondary btn-peligro"):"";
     open("need",`<h2>${id?"Editar faltante":"Anotar producto"}</h2>${remove}${errorHtml}${priceInfo}<form data-shopping-form="need" data-id="${esc(id||"")}">
       <label class="form-label">Producto<input name="name" class="form-input" required maxlength="120" list="shoppingProducts" value="${esc(n.name||"")}" placeholder="Ej: queso cremoso"></label><datalist id="shoppingProducts">${names.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist>
       <details ${n.quantity!=null||n.note||n.brand?"open":""}><summary>Agregar detalles</summary><div class="correction-grid">
@@ -212,7 +247,7 @@ export function iniciarListas({db,getData,categorias}) {
     if(a==="duplicate"){listNameForm("duplicate",id);return;}
     if(a==="archive"){if(confirm("¿Finalizar esta lista y conservarla en el historial? Los productos pendientes seguirán en Faltantes."))await run(()=>repo.archivar(id,catalog),()=>{overlay.style.display="none";dialog=null;});return;}
     if(a==="discard"){
-      await run(()=>repo.completar(id,false,true),()=>{overlay.style.display="none";dialog=null;});
+      await borrarProducto(id);
       return;
     }
     if(a==="restore"){await run(()=>repo.completar(id,false));return;}
@@ -249,12 +284,13 @@ export function iniciarListas({db,getData,categorias}) {
   fab.addEventListener("click",()=>{if(usable())quickForm();});
   document.getElementById("shoppingModalClose").addEventListener("click",()=>{if(dialog?.kind==="receipt"){receipt=null;matches=[];}close();});
 
-  function processQueue(){if(dialog||busy||entrada.isSaving()||getData().busy||!usable()||!queue.length)return;const next=queue.shift();if(next.scope!==context.kind+"/"+context.id)return processQueue();
+  function processQueue(){if(dialog||removeDialog.open||duplicateDialog.open||busy||entrada.isSaving()||getData().busy||!usable()||!queue.length)return;const next=queue.shift();if(next.scope!==context.kind+"/"+context.id)return processQueue();
     const found=encontrarComprados(needs,next).filter(m=>!(m.need.receiptLinks||[]).some(l=>l.purchaseId===next.id));if(!found.length)return processQueue();receipt=next;matches=found;
     open("receipt",`<h2>¿Compraste estos productos?</h2><p>Encontramos coincidencias en el ticket de ${esc(next.storeName)}. Confirmá cuáles cubren tus faltantes.</p>${found.map(m=>`<label class="shopping-check shopping-receipt-row"><input name="receiptNeed" type="checkbox" value="${esc(m.need.id)}" ${m.score===1&&m.comparable?"checked":""}><span><strong>${esc(m.need.name)}</strong><br>${m.lines.map(l=>esc(l.name)).join(", ")}<br>${m.comparable?`${number(m.quantity)} ${esc(m.unit)}`:"Cantidad no comparable: tildalo solo si cubre todo el pendiente."}${m.score<1?" · Coincidencia aproximada: revisar":""}</span></label>`).join("")}${errorHtml}<div class="modal-actions">${action("receipt-confirm","Confirmar productos comprados","","btn-primary")}</div>`);
   }
   function cambiarEspacio(next){unsubs.forEach(f=>f());unsubs=[];entrada.reset();expanded=new Set();quickSelections=new Map();detailedDraft=null;context=next?{...next}:null;needs=[];lists=[];promos=[];catalog=[];queue=[];ready=new Set();error="";dialog=null;receipt=null;overlay.style.display="none";repo=null;
     if(duplicateDialog.open)duplicateDialog.close("");
+    if(removeDialog.open)removeDialog.close("");
     recentNeeds.clear();
     const prefs=leerPreferencias("listas",context);
     sort=prefs.sort==="category"?"category":"manual";

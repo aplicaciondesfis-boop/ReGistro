@@ -52,7 +52,9 @@ export function cotizar(needs,catalog) {
     posibles.filter(p=>p.unit===unit).forEach(p=>{const viejo=porTienda.get(p.storeKey);if(!viejo||p.date>viejo.date)porTienda.set(p.storeKey,p);});
     const offers = [...porTienda.values()].sort((a,b)=>a.price-b.price);
     const amount = need.quantity == null ? 1 : Math.max(0,need.quantity-Number(need.fulfilled||0));
-    return { need, unit, amount, reference:need.quantity==null, offers, best:offers[0]||null };
+    const averagePrice = offers.length ? offers.reduce((total, offer)=>total+offer.price,0)/offers.length : null;
+    return { need, unit, amount, reference:need.quantity==null, offers, best:offers[0]||null,
+      averagePrice, estimatedTotal:averagePrice==null?null:averagePrice*amount };
   });
   const keys = [...new Set(lines.flatMap(l=>l.offers.map(p=>p.storeKey)))];
   const stores = keys.map(key=>{
@@ -61,7 +63,8 @@ export function cotizar(needs,catalog) {
   });
   const complete=stores.filter(s=>s.complete).sort((a,b)=>a.total-b.total);
   return {lines,stores:stores.sort((a,b)=>b.covered-a.covered||a.total-b.total),best:complete[0]||null,
-    splitTotal:lines.reduce((s,l)=>s+(l.best?l.best.price*l.amount:0),0),known:lines.filter(l=>l.best).length,reference:lines.some(l=>l.reference)};
+    splitTotal:lines.reduce((s,l)=>s+(l.best?l.best.price*l.amount:0),0),known:lines.filter(l=>l.best).length,reference:lines.some(l=>l.reference),
+    averageTotal:lines.reduce((total,line)=>total+(line.estimatedTotal??0),0)};
 }
 
 function semejanza(a,b) {

@@ -23,7 +23,7 @@ import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken as getAppChec
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
 import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs?v=12";
 import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "./productos.mjs?v=12";
-import { iniciarListas } from "./listas.js?v=16";
+import { iniciarListas } from "./listas.js?v=17";
 import { guardarPreferencias, leerPreferencias, periodosMensuales } from "./preferencias.mjs?v=16";
 
 // Configuración del proyecto aprovisionado en Firebase
@@ -96,7 +96,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "vistas v16";
+versionTag.textContent = "listas v17";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 const shopping = iniciarListas({db,getData:()=>({purchases,items:purchaseItems,busy:!!actividadActual}),categorias:CATEGORIAS});
