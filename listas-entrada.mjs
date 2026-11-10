@@ -1,4 +1,4 @@
-import {claveNecesidad,normalizar,pendiente,validarNecesidad} from "./compras.mjs?v=19";
+import {claveNecesidad,normalizar,pendiente,validarNecesidad} from "./compras.mjs?v=20";
 import {coincidenciaProducto,identificarProducto} from "./identidad-productos.mjs?v=18";
 
 export function posiblesDuplicados(input, needs) {

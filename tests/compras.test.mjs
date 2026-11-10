@@ -15,10 +15,12 @@ test("un pote registrado en kilos cotiza por unidad usando el contenido original
 });
 
 test("un precio de un producto parecido o de venta a granel es solo orientativo",()=>{
-  const c=crearCatalogo([purchase("p","A","2026-10-28",2500)],[item("i","p","Repuesto de difusor",1500),item("j","p","Papa",1000)]);
-  const q=cotizar([{name:"Difusor"},{name:"Papa",unit:"unidad",quantity:1}],c);
+  const c=crearCatalogo([purchase("p","A","2026-10-28",3300)],[item("i","p","Repuesto de difusor",1500),item("j","p","Papa",1000),item("k","p","Bombón relleno de dulce de leche",500),item("l","p","Desodorante",300)]);
+  const q=cotizar([{name:"Difusor"},{name:"Papa",unit:"unidad",quantity:1},{name:"Dulce de leche"},{name:"Desodorante de piso"}],c);
   assert.equal(q.lines[0].relatedOffer.name,"Repuesto de difusor");
   assert.equal(q.lines[1].relatedOffer.unit,"kg");
+  assert.equal(q.lines[2].relatedOffer,null);
+  assert.equal(q.lines[3].relatedOffer,null);
   assert.equal(q.known,0);
   assert.equal(q.averageTotal,0);
 });

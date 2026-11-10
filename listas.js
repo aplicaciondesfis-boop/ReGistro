@@ -1,7 +1,7 @@
 import * as firestore from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
-import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=19";
-import {crearRepositorioListas} from "./listas-store.mjs?v=19";
-import {crearEntradaRapida,posiblesDuplicados} from "./listas-entrada.mjs?v=19";
+import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=20";
+import {crearRepositorioListas} from "./listas-store.mjs?v=20";
+import {crearEntradaRapida,posiblesDuplicados} from "./listas-entrada.mjs?v=20";
 import {guardarPreferencias,leerPreferencias} from "./preferencias.mjs?v=16";
 
 export function iniciarListas({db,getData,categorias}) {

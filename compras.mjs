@@ -59,8 +59,9 @@ function buscarReferencia(need, catalog) {
     if(coincidenciaProducto(need.name,name)>0)return true;
     const other=identificarProducto(name);
     if(requested.familia&&requested.familia===other.familia)return false;
-    const [short,long]=[requested.key,other.key].sort((a,b)=>a.length-b.length);
-    return short.length>=4&&` ${long} `.includes(` ${short} `);
+    // Una variedad o un repuesto pueden orientar. Una mención dentro de un
+    // ingrediente no identifica el producto que se está buscando.
+    return requested.key.length>=4&&(other.key.startsWith(`${requested.key} `)||other.key===`repuesto de ${requested.key}`);
   });
   return candidates.sort((a,b)=>coincidenciaProducto(need.name,b.name||b.key)-coincidenciaProducto(need.name,a.name||a.key)||String(b.date||"").localeCompare(a.date||""))[0]||null;
 }
