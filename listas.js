@@ -1,7 +1,7 @@
 import * as firestore from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
-import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=18";
-import {crearRepositorioListas} from "./listas-store.mjs?v=18";
-import {crearEntradaRapida,posiblesDuplicados} from "./listas-entrada.mjs?v=18";
+import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=19";
+import {crearRepositorioListas} from "./listas-store.mjs?v=19";
+import {crearEntradaRapida,posiblesDuplicados} from "./listas-entrada.mjs?v=19";
 import {guardarPreferencias,leerPreferencias} from "./preferencias.mjs?v=16";
 
 export function iniciarListas({db,getData,categorias}) {
@@ -99,23 +99,35 @@ export function iniciarListas({db,getData,categorias}) {
   }
   function ordered(ns,list=null){let result=[...ns];if(sort==="category")return result.sort((a,b)=>(a.category||"Sin detalle").localeCompare(b.category||"Sin detalle","es")||a.name.localeCompare(b.name,"es"));
     if(list){const ids=list.needIds||[];return result.sort((a,b)=>ids.indexOf(a.id)-ids.indexOf(b.id));}return result.sort((a,b)=>(a.order||0)-(b.order||0)||a.id.localeCompare(b.id));}
+  function referenciaHtml(offer, related){
+    if(!offer)return "Sin precio comparable registrado";
+    const pack=offer.unit==="unidad"&&offer.pack
+      ? ` · ${number(offer.pack.content*1000)} ${offer.pack.unit==="kg"?"g":"ml"} por envase` : "";
+    const label=related?`Producto relacionado · ${esc(offer.name||offer.key)}`:"Último precio de referencia";
+    return `${label} <strong>${money(offer.price)}/${esc(offer.unit)}</strong>${pack}<br>${esc(offer.store)} · ${date(offer.date)}`;
+  }
   function rows(ns,listId="",history=false,compact=false) {
     const list=lists.find(l=>l.id===listId),items=ordered(ns,list);
     if(!items.length)return '<div class="vacio">Todavía no hay productos.</div>';
     const quote=cotizar(items,catalog);
     return `<ul class="shopping-items">${items.map((n,index)=>{
-      const line=quote.lines.find(l=>l.need.id===n.id),best=line?.best;
+      const line=quote.lines.find(l=>l.need.id===n.id),best=line?.best,relatedOffer=line?.relatedOffer;
       if(compact){
-        const price=line?.averagePrice==null?'<span class="shopping-item-budget is-missing">Sin precio</span>':
-          `<span class="shopping-item-budget"><strong>${money(line.averagePrice)}/${esc(line.unit)}</strong>${line.reference?'':`<small>${number(line.amount)} ${esc(line.unit)} · ${money(line.estimatedTotal)}</small>`}</span>`;
-        return `<li class="shopping-item shopping-item-compact"><label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}"><span>${esc(n.name)}</span></label>${price}<div class="shopping-item-actions">${action("edit-need","Detalles",n.id)}${action("discard","Borrar",n.id,"btn-chico btn-peligro")}</div></li>`;
+        const related=line?.related||Boolean(relatedOffer);
+        const priceValue=line?.averagePrice??relatedOffer?.price;
+        const unit=best?line.unit:relatedOffer?.unit;
+        const caption=[related?"Relacionado":"",best&&!line.reference&&line.amount!==1?`Total ${money(line.estimatedTotal)}`:""].filter(Boolean).join(" · ");
+        const title=related?`Producto relacionado: ${(relatedOffer||best)?.name||""}`:caption;
+        const price=priceValue==null?'<span class="shopping-item-budget is-missing">Sin precio</span>':
+          `<span class="shopping-item-budget" title="${esc(title)}"><strong>${related?"≈ ":""}${money(priceValue)}/${esc(unit==="unidad"?"u":unit)}</strong>${caption?`<small>${esc(caption)}</small>`:""}</span>`;
+        return `<li class="shopping-item shopping-item-compact"><label class="shopping-check" title="${esc(n.name)}"><input type="checkbox" data-shopping-toggle="${esc(n.id)}"><span>${esc(n.name)}</span></label>${price}<div class="shopping-item-actions">${action("edit-need",'<span class="shopping-action-label">Detalles</span><span class="shopping-action-icon" aria-hidden="true">⋯</span>',n.id)}${action("discard",'<span class="shopping-action-label">Borrar</span><span class="shopping-action-icon" aria-hidden="true">×</span>',n.id,"btn-chico btn-peligro")}</div></li>`;
       }
       const names=(n.listIds||[]).map(id=>activeLists().find(l=>l.id===id)?.name).filter(Boolean);
       return `<li class="shopping-item ${n.done?"shopping-done":""}">
         <label class="shopping-check"><input type="checkbox" data-shopping-toggle="${esc(n.id)}" ${n.done?"checked":""} ${history||n.cancelled?"disabled":""}><span>${esc(n.name)}</span></label>
         <div class="shopping-item-meta">${n.quantity!=null?`${number(n.fulfilled||0)} / ${number(n.quantity)} ${esc(n.unit||"unidad")} · `:""}${esc(n.brand||"")}${n.note?" · "+esc(n.note):""}
           ${names.length?`<div>${names.map(name=>`<span class="shopping-tag">${esc(name)}</span>`).join(" ")}</div>`:""}
-          ${n.cancelled?"Borrado":best?`<div>${money(best.price)}/${esc(line.unit)} · ${esc(best.store)} · ${date(best.date)}</div>`:n.done?"Comprado":"<div>Sin precio comparable registrado</div>"}
+          ${n.cancelled?"Borrado":n.done?"Comprado":`<div>${referenciaHtml(best||relatedOffer,line?.related||Boolean(relatedOffer))}</div>`}
         </div>
         ${!history&&n.cancelled?`<div>${action("restore","Recuperar",n.id)}</div>`:!history&&!n.done?`<div class="shopping-row-actions" data-shopping-list="${esc(listId)}">${action("edit-need",compact?"Detalles":"Detalles / listas",n.id)}${action("discard","Borrar",n.id,"btn-chico btn-peligro")}${sort==="manual"?`${action("up","↑",n.id)}${action("down","↓",n.id)}`:""}</div>`:""}
       </li>`;
@@ -129,7 +141,7 @@ export function iniciarListas({db,getData,categorias}) {
       <p class="card-meta">${q.reference?"Referencia: 1 kg, 1 litro o 1 unidad en productos sin cantidad definida. Podés ajustar las cantidades en Detalles.":"Estimación según las cantidades pendientes."} Los precios muestran la fecha de tu última compra registrada.</p>
       ${q.best?`<div class="aviso"><strong>Una sola tienda: ${esc(q.best.name)} · ${money(q.best.total)}</strong></div>`:'<div class="aviso aviso-warn">Faltan precios para comparar la compra completa en un solo comercio.</div>'}
       <p>Compra repartida: <strong>${money(q.splitTotal)}</strong> · ${q.known}/${q.lines.length} productos con precio.${q.best?` Diferencia estimada: ${money(Math.max(0,q.best.total-q.splitTotal))}.`:""}</p>
-      <div class="tabla-wrap"><table class="tabla mini"><thead><tr><th>Producto</th><th>Referencia / cantidad</th><th>Mejor dato</th><th>Precios por comercio</th></tr></thead><tbody>${q.lines.map(l=>`<tr><td>${esc(l.need.name)}</td><td>${number(l.amount)} ${esc(l.unit||"sin unidad comparable")}${l.reference?" (referencia)":""}</td><td>${l.best?`${money(l.best.price)}/${esc(l.unit)}<br>${esc(l.best.store)}`:"Sin datos"}</td><td>${l.offers.map(p=>`${esc(p.store)}: ${money(p.price)}/${esc(p.unit)} · ${date(p.date)}${p.cashback>0?" · ese ticket tuvo reintegro":""}`).join("<br>")||"—"}</td></tr>`).join("")}</tbody></table></div>
+      <div class="tabla-wrap"><table class="tabla mini"><thead><tr><th>Producto</th><th>Referencia / cantidad</th><th>Mejor dato</th><th>Precios por comercio</th></tr></thead><tbody>${q.lines.map(l=>`<tr><td>${esc(l.need.name)}</td><td>${number(l.amount)} ${esc(l.unit||"sin unidad comparable")}${l.reference?" (referencia)":""}</td><td>${referenciaHtml(l.best||l.relatedOffer,l.related||Boolean(l.relatedOffer))}${l.relatedOffer?"<br>Orientativo, fuera del total":""}</td><td>${l.offers.map(p=>`${esc(p.store)}: ${money(p.price)}/${esc(p.unit)} · ${date(p.date)}${p.cashback>0?" · ese ticket tuvo reintegro":""}`).join("<br>")||"—"}</td></tr>`).join("")}</tbody></table></div>
       <details><summary>Totales y cobertura por comercio</summary><div class="tabla-wrap"><table class="tabla mini"><thead><tr><th>Comercio</th><th>Productos con precio</th><th>Importe</th></tr></thead><tbody>${q.stores.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.covered}/${q.lines.length}</td><td>${money(s.total)} ${s.complete?"":"(parcial)"}</td></tr>`).join("")}</tbody></table></div></details>
       <label class="form-label">Fecha prevista de compra<input type="date" class="form-input" data-shopping-date value="${esc(shoppingDate)}"></label>
       <div class="aviso"><strong>Posibles descuentos y reintegros, aparte</strong><p class="card-meta">Información anotada por ustedes. Confirmá vigencia, medio de pago y topes. No se descuenta automáticamente del total de referencia.</p>${benefits.length?benefits.map(benefitHtml).join(""):'<p class="card-meta">No hay beneficios anotados para estos comercios y esta fecha.</p>'}</div>
@@ -193,7 +205,8 @@ export function iniciarListas({db,getData,categorias}) {
   function needForm(id=null,listId="",initialName="",initialLists=null){
     const n=needs.find(x=>x.id===id)||{name:initialName},selected=n.listIds||initialLists||[listId].filter(Boolean),names=[...new Set(catalog.map(p=>p.name))].sort();
     const reference=id?cotizar([n],catalog).lines[0]:null,best=reference?.best;
-    const priceInfo=id?`<p class="aviso shopping-detail-price">${best?`Último precio de referencia: <strong>${money(best.price)}/${esc(reference.unit)}</strong><br>${esc(best.store)} · ${date(best.date)}`:"Sin precio comparable registrado"}</p>`:"";
+    const relatedOffer=reference?.relatedOffer;
+    const priceInfo=id?`<p class="aviso shopping-detail-price">${referenciaHtml(best||relatedOffer,reference?.related||Boolean(relatedOffer))}${relatedOffer?"<br>Precio orientativo, fuera del presupuesto.":""}</p>`:"";
     const remove=id?action("discard","Borrar producto",id,"btn-secondary btn-peligro"):"";
     open("need",`<h2>${id?"Editar faltante":"Anotar producto"}</h2>${remove}${errorHtml}${priceInfo}<form data-shopping-form="need" data-id="${esc(id||"")}">
       <label class="form-label">Producto<input name="name" class="form-input" required maxlength="120" list="shoppingProducts" value="${esc(n.name||"")}" placeholder="Ej: queso cremoso"></label><datalist id="shoppingProducts">${names.map(x=>`<option value="${esc(x)}"></option>`).join("")}</datalist>

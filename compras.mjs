@@ -32,31 +32,57 @@ export function crearCatalogo(purchases, items) {
     const key = identity.key, storeKey = normalizar(p.storeName);
     if (!key || key === "sin detalle" || !storeKey) continue;
     const suma = sumas.get(p.id), factor = suma > Number(p.totalPaid)+.02 && p.totalPaid > 0 ? p.totalPaid/suma : 1;
-    const units=Number(i.quantity||1)*Number(i.presentationValue||1)*factorUnidad(i.presentationUnit);
+    const quantity=Number(i.quantity||1);
+    const content=Number(i.presentationValue||1)*factorUnidad(i.presentationUnit);
+    const units=quantity*content;
     const cost=Number(i.lineTotal)*factor;
     if(!(units>0)||!Number.isFinite(units)||cost<0||!Number.isFinite(cost))continue;
     const date = fechaDato(p.date) || fechaDato(p.createdAt);
     if (!date || !Number.isFinite(+date)) continue;
-    const record = { name:identity.nombre, key, brand:i.brand||"", category:i.category||"Sin detalle", unit:unidadBase(i.presentationUnit), store:p.storeName, storeKey,
+    const unit=unidadBase(i.presentationUnit);
+    const pack=unit!=="unidad"&&content!==1&&Number.isInteger(quantity)?{content,unit}:null;
+    const record = { name:identity.nombre, key, brand:i.brand||"", category:i.category||"Sin detalle", unit, pack, store:p.storeName, storeKey,
       price:0, date:date.toISOString(), purchaseId:p.id, itemId:i.id||"", cashback:Number(p.cashbackAmount)||0, paymentMethod:p.paymentMethod||"" };
     const pk = [key,normalizar(i.brand),record.unit,storeKey].join("|");
-    const ticketKey=p.id+"|"+pk, group=agrupados.get(ticketKey)||{record,pk,cost:0,units:0};group.cost+=cost;group.units+=units;agrupados.set(ticketKey,group);
+    const ticketKey=p.id+"|"+pk, group=agrupados.get(ticketKey)||{record,pk,cost:0,units:0};
+    if(group.record.pack?.content!==pack?.content)group.record.pack=null;
+    group.cost+=cost;group.units+=units;agrupados.set(ticketKey,group);
   }
   for(const {record,pk,cost,units} of agrupados.values()){record.price=cost/units;if(record.price>0&&(!precios.has(pk)||record.date>precios.get(pk).date))precios.set(pk,record);}
   return [...precios.values()];
 }
 
+function buscarReferencia(need, catalog) {
+  const requested=identificarProducto(need.name);
+  const candidates=catalog.filter(offer=>{
+    const name=offer.name||offer.key;
+    if(coincidenciaProducto(need.name,name)>0)return true;
+    const other=identificarProducto(name);
+    if(requested.familia&&requested.familia===other.familia)return false;
+    const [short,long]=[requested.key,other.key].sort((a,b)=>a.length-b.length);
+    return short.length>=4&&` ${long} `.includes(` ${short} `);
+  });
+  return candidates.sort((a,b)=>coincidenciaProducto(need.name,b.name||b.key)-coincidenciaProducto(need.name,a.name||a.key)||String(b.date||"").localeCompare(a.date||""))[0]||null;
+}
+
 export function cotizar(needs,catalog) {
   const lines = needs.filter(pendiente).map(need => {
-    const posibles = catalog.filter(p => coincidenciaProducto(need.name,p.name||p.key)>0 && (!need.brand || normalizar(p.brand) === normalizar(need.brand)));
+    const brand=normalizar(need.brand);
+    const conMarca=catalog.filter(p=>!brand||normalizar(p.brand)===brand);
+    const posibles=conMarca.filter(p=>coincidenciaProducto(need.name,p.name||p.key)>0);
     const unidades = [...new Set(posibles.map(p=>p.unit))];
     const unit = need.unit || (unidades.length === 1 ? unidades[0] : "");
     const porTienda = new Map();
-    posibles.filter(p=>p.unit===unit).forEach(p=>{const viejo=porTienda.get(p.storeKey);if(!viejo||p.date>viejo.date)porTienda.set(p.storeKey,p);});
+    for(const p of posibles){
+      const offer=p.unit===unit?p:unit==="unidad"&&p.pack?{...p,unit,price:p.price*p.pack.content}:null;
+      if(offer&&(!porTienda.has(p.storeKey)||p.date>porTienda.get(p.storeKey).date))porTienda.set(p.storeKey,offer);
+    }
     const offers = [...porTienda.values()].sort((a,b)=>a.price-b.price);
     const amount = need.quantity == null ? 1 : Math.max(0,need.quantity-Number(need.fulfilled||0));
     const averagePrice = offers.length ? offers.reduce((total, offer)=>total+offer.price,0)/offers.length : null;
-    return { need, unit, amount, reference:need.quantity==null, offers, best:offers[0]||null,
+    const related=offers.some(p=>coincidenciaProducto(need.name,p.name||p.key)<1);
+    return { need, unit, amount, reference:need.quantity==null, offers, best:offers[0]||null, related,
+      relatedOffer:offers.length?null:buscarReferencia(need,conMarca),
       averagePrice, estimatedTotal:averagePrice==null?null:averagePrice*amount };
   });
   const keys = [...new Set(lines.flatMap(l=>l.offers.map(p=>p.storeKey)))];
