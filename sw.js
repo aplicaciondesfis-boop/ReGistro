@@ -1,15 +1,15 @@
-const CACHE_NAME = 'finanzas-gchu-v15';
+const CACHE_NAME = 'finanzas-gchu-v16';
 const ASSETS = [
   './',
   './index.html',
   './styles.css?v=19',
-  './app.js?v=19',
+  './app.js?v=20',
   './tickets.mjs?v=12',
   './productos.mjs?v=12',
-  './compras.mjs?v=19',
-  './listas-store.mjs?v=19',
-  './listas.js?v=19',
-  './listas-entrada.mjs?v=19',
+  './compras.mjs?v=20',
+  './listas-store.mjs?v=20',
+  './listas.js?v=20',
+  './listas-entrada.mjs?v=20',
   './identidad-productos.mjs?v=18',
   './preferencias.mjs?v=16',
   './manifest.json',
