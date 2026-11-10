@@ -5,6 +5,24 @@ import {crearCatalogo,cotizar,encontrarComprados,aplicarCompra,promocionesAplica
 const item=(id,purchaseId,name,lineTotal,presentationValue=1)=>({id,purchaseId,canonicalProductName:name,lineTotal,quantity:1,presentationValue,presentationUnit:"kg"});
 const purchase=(id,storeName,date,totalPaid,cashbackAmount=0)=>({id,storeName,date,totalPaid,cashbackAmount,status:"confirmado"});
 
+test("un pote registrado en kilos cotiza por unidad usando el contenido original",()=>{
+  const c=crearCatalogo([purchase("p","Vea","2026-10-28",2889)],[{...item("i","p","Queso untable light",2889,.29),brand:"La Serenisima"}]);
+  const q=cotizar([{name:"Queso untable",brand:"la serenisima",unit:"unidad",quantity:2}],c);
+  assert.equal(q.known,1);
+  assert.equal(q.lines[0].related,true);
+  assert.equal(q.lines[0].best.pack.content,.29);
+  assert.equal(Math.round(q.averageTotal),5778);
+});
+
+test("un precio de un producto parecido o de venta a granel es solo orientativo",()=>{
+  const c=crearCatalogo([purchase("p","A","2026-10-28",2500)],[item("i","p","Repuesto de difusor",1500),item("j","p","Papa",1000)]);
+  const q=cotizar([{name:"Difusor"},{name:"Papa",unit:"unidad",quantity:1}],c);
+  assert.equal(q.lines[0].relatedOffer.name,"Repuesto de difusor");
+  assert.equal(q.lines[1].relatedOffer.unit,"kg");
+  assert.equal(q.known,0);
+  assert.equal(q.averageTotal,0);
+});
+
 test("el presupuesto usa un kilo de referencia aunque la compra histórica sea medio kilo",()=>{
   const catalog=crearCatalogo([purchase("p","Tienda A","2026-11-01",5000)],[item("i","p","Queso",5000,.5)]);
   const q=cotizar([{name:"Queso",done:false}],catalog);
