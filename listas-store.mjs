@@ -1,4 +1,4 @@
-import {validarNecesidad,claveNecesidad,aplicarCompra,cotizar} from "./compras.mjs?v=20";
+import {validarNecesidad,claveNecesidad,aplicarCompra,cotizar} from "./compras.mjs?v=21";
 
 export function crearRepositorioListas(db,api,scope) {
   const base=[scope.kind,scope.id], meta=()=>({updatedAt:api.serverTimestamp(),lastModifiedByUid:scope.uid});

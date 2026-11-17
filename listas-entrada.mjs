@@ -1,5 +1,5 @@
-import {claveNecesidad,normalizar,pendiente,validarNecesidad} from "./compras.mjs?v=20";
-import {coincidenciaProducto,identificarProducto} from "./identidad-productos.mjs?v=18";
+import {claveNecesidad,normalizar,pendiente,validarNecesidad} from "./compras.mjs?v=21";
+import {coincidenciaProducto,identificarProducto} from "./identidad-productos.mjs?v=21";
 
 export function posiblesDuplicados(input, needs) {
   const brand = normalizar(input.brand), key = claveNecesidad(input);

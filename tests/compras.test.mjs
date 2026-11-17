@@ -5,6 +5,29 @@ import {crearCatalogo,cotizar,encontrarComprados,aplicarCompra,promocionesAplica
 const item=(id,purchaseId,name,lineTotal,presentationValue=1)=>({id,purchaseId,canonicalProductName:name,lineTotal,quantity:1,presentationValue,presentationUnit:"kg"});
 const purchase=(id,storeName,date,totalPaid,cashbackAmount=0)=>({id,storeName,date,totalPaid,cashbackAmount,status:"confirmado"});
 
+test("los tickets completan unidades de envases y respetan una marca explícita",()=>{
+  const need={id:"n",name:"Queso untable",brand:"La Serenísima",quantity:2,unit:"unidad"};
+  const receipt={id:"r",date:new Date(),items:[{...item("i","r","Queso untable light",2889,.29),brand:"La Serenisima"}]};
+  const match=encontrarComprados([need],receipt)[0];
+  assert.equal(match.quantity,1);
+  assert.equal(match.unit,"unidad");
+  assert.equal(match.comparable,true);
+  const change=aplicarCompra(need,match,receipt);
+  assert.equal(change.fulfilled,1);
+  assert.equal(change.done,false);
+  receipt.items[0].brand="La Serenisima Otra";
+  assert.equal(encontrarComprados([need],receipt).length,0);
+});
+
+test("cantidades cero o inválidas no se convierten en precios ni compras válidas",()=>{
+  const p=purchase("p","A","2026-11-01",1000);
+  for(const invalid of [0,-1,Infinity,NaN]){
+    const i={...item("i","p","Papa",1000),quantity:invalid};
+    assert.equal(crearCatalogo([p],[i]).length,0);
+    assert.equal(encontrarComprados([{id:"n",name:"Papa"}],{date:new Date(),items:[i]}).length,0);
+  }
+});
+
 test("un pote registrado en kilos cotiza por unidad usando el contenido original",()=>{
   const c=crearCatalogo([purchase("p","Vea","2026-10-28",2889)],[{...item("i","p","Queso untable light",2889,.29),brand:"La Serenisima"}]);
   const q=cotizar([{name:"Queso untable",brand:"la serenisima",unit:"unidad",quantity:2}],c);
