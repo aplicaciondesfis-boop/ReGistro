@@ -1,8 +1,9 @@
 import * as firestore from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
-import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=20";
-import {crearRepositorioListas} from "./listas-store.mjs?v=20";
-import {crearEntradaRapida,posiblesDuplicados} from "./listas-entrada.mjs?v=20";
+import {crearCatalogo,cotizar,encontrarComprados,normalizar,pendiente,fechaDato,promocionesAplicables} from "./compras.mjs?v=21";
+import {crearRepositorioListas} from "./listas-store.mjs?v=21";
+import {crearEntradaRapida,posiblesDuplicados} from "./listas-entrada.mjs?v=21";
 import {guardarPreferencias,leerPreferencias} from "./preferencias.mjs?v=16";
+import {identificarProducto} from "./identidad-productos.mjs?v=21";
 
 export function iniciarListas({db,getData,categorias}) {
   const root=document.getElementById("shoppingApp"),fab=document.getElementById("shoppingFab"),overlay=document.getElementById("shoppingModal"),body=document.getElementById("shoppingModalBody");
@@ -21,7 +22,7 @@ export function iniciarListas({db,getData,categorias}) {
   const colors=["Naranja","Verde","Azul","Violeta","Rosa"];
   const cardPref=id=>Object.hasOwn(cardPrefs,id)?cardPrefs[id]||{}:{};
   const activeLists=()=>lists.filter(l=>l.status==="active");
-  const entrada=crearEntradaRapida({getScope:()=>repo,guardar:(name,options,target)=>guardarProducto(target,{name,listIds:options.listIds||[],category:catalog.find(p=>p.key===normalizar(name))?.category||"Sin detalle"}),onChange:()=>render()});
+  const entrada=crearEntradaRapida({getScope:()=>repo,guardar:(name,options,target)=>guardarProducto(target,{name,listIds:options.listIds||[],category:catalog.find(p=>p.key===identificarProducto(name).key)?.category||"Sin detalle"}),onChange:()=>render()});
 
   function elegirDuplicado(input,candidates){
     duplicateDialog.returnValue="";
@@ -290,7 +291,7 @@ export function iniciarListas({db,getData,categorias}) {
       showList(id);render();return;
     }
     if(form.dataset.shoppingForm==="list-name"){const op=form.dataset.operation,returnKey=dialog?.returnKey;run(()=>op==="new"?repo.crearLista(d.name):op==="rename"?repo.renombrar(id,d.name):repo.duplicar(id,d.name),newId=>{if(newId)expanded.add(newId);if(returnKey&&newId){quickSelections.set(returnKey,[...(quickSelections.get(returnKey)||[]),newId]);quickForm("",returnKey);}else{overlay.style.display="none";dialog=null;mode="active";}});return;}
-    if(form.dataset.shoppingForm==="need"){d.listIds=f.getAll("listIds");const product=catalog.find(p=>p.key===normalizar(d.name));if(!d.unit&&d.quantity)d.unit=product?.unit||"unidad";if(!d.category&&product)d.category=product.category;
+    if(form.dataset.shoppingForm==="need"){d.listIds=f.getAll("listIds");const product=catalog.find(p=>p.key===identificarProducto(d.name).key);if(!d.unit&&d.quantity)d.unit=product?.unit||"unidad";if(!d.category&&product)d.category=product.category;
       run(()=>guardarProducto(repo,d,id,d.newListName||""),result=>{if(result===false)return;if(detailedDraft&&entrada.state(detailedDraft.key).text===detailedDraft.text)entrada.setText(detailedDraft.key,"");detailedDraft=null;overlay.style.display="none";dialog=null;});}
     else{d.weekdays=f.getAll("weekdays").map(Number);d.disabled=f.has("disabled");run(()=>repo.guardarBeneficio(d,id),()=>{overlay.style.display="none";dialog=null;});}
   });

@@ -5,6 +5,38 @@ import {crearCatalogo,cotizar,encontrarComprados,claveNecesidad} from "../compra
 import {posiblesDuplicados} from "../listas-entrada.mjs";
 import {crearApp} from "./app-fixture.mjs";
 
+test("las equivalencias de limpieza y papel se usan para presupuestar, avisar y reconocer compras",()=>{
+  const groups=[
+    ["Rollo de cocina","papel cocina","papel de cocina","servilletas"],
+    ["Limpiador para pisos","limpiador para piso","desodorante de piso","desodorante de pisos"],
+    ["Jabón de ropa","jabon para ropa","jabón líquido de ropa","jabon liquido para ropa"]
+  ];
+  const purchases=groups.map((g,i)=>({id:String(i),storeName:"Tienda",date:"2026-11-01",totalPaid:1000+i}));
+  const items=groups.map((g,i)=>({id:String(i),purchaseId:String(i),canonicalProductName:g[0],quantity:1,presentationValue:1,presentationUnit:"unidad",lineTotal:1000+i}));
+  const catalog=crearCatalogo(purchases,items);
+  for(const [index,group] of groups.entries()){
+    for(const name of group){
+      assert.equal(identificarProducto(name).nombre,group[0]);
+      assert.equal(cotizar([{name}],catalog).averageTotal,1000+index);
+      if(name!==group[0])assert.equal(posiblesDuplicados({name},[{id:"n",name:group[0]}]).length,1);
+      assert.equal(encontrarComprados([{id:"n",name}],{date:new Date(),items:[items[index]]})[0].score,1);
+    }
+  }
+  assert.equal(coincidenciaProducto("Jabón de tocador","Jabón de ropa"),0);
+  assert.equal(coincidenciaProducto("Papel higiénico","Servilletas"),0);
+});
+
+test("buscar una equivalencia o un nombre sin tildes encuentra el grupo del comparador",()=>{
+  const app=crearApp();
+  app.ejecutar('purchaseItems=[{id:"a",canonicalProductName:"Papel cocina",presentationUnit:"unidad",quantity:1,presentationValue:1,lineTotal:500},{id:"b",canonicalProductName:"Jabón de ropa",presentationUnit:"l",quantity:1,presentationValue:1,lineTotal:1000}];');
+  app.get("prodOrden").options=[];
+  for(const search of ["servilletas","jabon"]){
+    app.get("prodSearch").value=search;
+    app.ejecutar("renderProductos()");
+    assert.match(app.get("productosTabla").innerHTML,search==="jabon"?/Jabón de ropa/:/Rollo de cocina/);
+  }
+});
+
 test("agrupa las harinas comunes acordadas y distingue las otras variedades",()=>{
   for(const name of ["Harina 000","HARINA 0000","Harina 0000 con vitaminas","Harina de trigo 0000"]){
     assert.equal(identificarProducto(name).nombre,"Harina común");

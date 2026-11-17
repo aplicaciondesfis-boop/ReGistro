@@ -23,8 +23,8 @@ import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken as getAppChec
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-ai.js";
 import { numeroManual, buscarDuplicado, gruposPorTotal } from "./tickets.mjs?v=12";
 import { calcularCorreccionProducto, camposProducto, precioNormalizadoProducto } from "./productos.mjs?v=12";
-import { iniciarListas } from "./listas.js?v=20";
-import { identificarProducto, EQUIVALENCIAS_PRODUCTOS } from "./identidad-productos.mjs?v=18";
+import { iniciarListas } from "./listas.js?v=21";
+import { identificarProducto, coincidenciaProducto, EQUIVALENCIAS_PRODUCTOS } from "./identidad-productos.mjs?v=21";
 import { guardarPreferencias, leerPreferencias, periodosMensuales } from "./preferencias.mjs?v=16";
 
 // Configuración del proyecto aprovisionado en Firebase
@@ -97,7 +97,7 @@ const scanLoadingIndicator = document.getElementById("scanLoadingIndicator");
 
 // Etiqueta de versión (chiquita, abajo a la izquierda) para comprobar que se cargó el app.js nuevo
 const versionTag = document.createElement("div");
-versionTag.textContent = "listas v20";
+versionTag.textContent = "listas v21";
 versionTag.style.cssText = "position:fixed;bottom:4px;left:6px;font-size:10px;opacity:.55;z-index:9999;pointer-events:none;";
 document.body.appendChild(versionTag);
 const shopping = iniciarListas({db,getData:()=>({purchases,items:purchaseItems,busy:!!actividadActual}),categorias:CATEGORIAS});
@@ -872,7 +872,7 @@ function renderCategorias() {
 
 // ----- Pestaña 3: PRODUCTOS -----
 function agruparProductos() {
-  const grupos = {};
+  const grupos = Object.create(null);
   purchaseItems.forEach(i => {
     const nombre = (i.canonicalProductName || "").trim();
     if (!nombre || nombre.toLowerCase() === "sin detalle") return;
@@ -885,7 +885,7 @@ function agruparProductos() {
   return Object.keys(grupos).map(k => {
     const items = grupos[k];
     const tiendas = [...new Set(items.map(i => compraDe[i.purchaseId] && compraDe[i.purchaseId].storeName).filter(Boolean))];
-    const cuentaUnidad = {};
+    const cuentaUnidad = Object.create(null);
     items.forEach(i => { const u = i.presentationUnit || "unidad"; cuentaUnidad[u] = (cuentaUnidad[u] || 0) + 1; });
     const unidad = Object.entries(cuentaUnidad).sort((a, b) => b[1] - a[1])[0][0];
     const precios = items.filter(i => (i.presentationUnit || "unidad") === unidad).map(i => precioNormalizadoProducto(i) * factorReintegro(i.purchaseId)).filter(x => x > 0);
@@ -931,7 +931,7 @@ function detalleProducto(g) {
 }
 
 function renderProductos() {
-  const busqueda = document.getElementById("prodSearch").value.toLowerCase().trim();
+  const busqueda = sinAcentos(document.getElementById("prodSearch").value);
   const soloRepetidos = document.getElementById("prodRepetidos").checked;
   const todos = agruparProductos();
 
@@ -943,7 +943,7 @@ function renderProductos() {
 
   const filas = todos.filter(g =>
     (!soloRepetidos || g.compras >= 2) &&
-    (!busqueda || g.nombre.toLowerCase().includes(busqueda) || g.items.some(i => `${i.canonicalProductName} ${i.brand || ""} ${i.rawDescription || ""}`.toLowerCase().includes(busqueda)))
+    (!busqueda || coincidenciaProducto(busqueda,g.nombre)>0 || sinAcentos(g.nombre).includes(busqueda) || g.items.some(i => sinAcentos(`${i.canonicalProductName} ${i.brand || ""} ${i.rawDescription || ""}`).includes(busqueda)))
   );
 
   // El selector de orden refleja el orden actual
